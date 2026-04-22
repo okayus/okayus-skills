@@ -85,7 +85,7 @@ Brief summary; full write-ups in [references/pitfalls.md](references/pitfalls.md
 - Authentication (passkeys / sessions / JWT) — deferred to a later phase
 - Security hardening (`secureHeaders`, CSP, `app.onError`, `sessionMiddleware`) — build on top of this skeleton in a later phase
 - Domain schema (tasks, users, etc.) — defer to when you know what the domain actually looks like
-- `drizzle-orm` / `drizzle-kit` — don't install until you have a real schema to generate migrations for. The empty `0000_init.sql` validates the pipeline without forcing a Chekhov's-gun dependency
+- `drizzle-orm` / `drizzle-kit` — don't install until you have a real schema to generate migrations for. The empty `0000_init.sql` validates the pipeline without forcing a Chekhov's-gun dependency. When you *do* adopt drizzle for real schema work, read the `cloudflare-d1-drizzle-migration` skill first — D1 has a silent incompatibility with drizzle-kit's generated PRAGMAs that can cascade-delete child data on table-rebuild migrations
 
 **Build logic on top after deploy is provably working**, not before.
 
