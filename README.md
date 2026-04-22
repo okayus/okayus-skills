@@ -28,6 +28,7 @@ gh skill install okayus/okayus-skills <skill-name>@v1.0.0 --agent claude-code
 |---|---|
 | [`cloudflare-workers-deploy-skeleton`](skills/cloudflare-workers-deploy-skeleton/) | Walking-Skeleton setup for a single-Worker SPA + API + Cron on Cloudflare Workers with D1 and GitHub Actions auto-deploy. Covers the 3-layer SPA routing dance, wrangler.jsonc template, deploy.yml, and the well-known setup pitfalls (D1 token scope, `pnpm deploy` collision, RP_ID locking). |
 | [`cloudflare-cron-to-discord`](skills/cloudflare-cron-to-discord/) | Cron Trigger → Discord Webhook pattern with the pure-function-then-boundary architecture. Covers UTC→JST pure conversion, build/post separation with throw-free error handling, vitest mock testing, dev/prod webhook naming for contamination detection, and the `/__scheduled` dev caveat with `@cloudflare/vite-plugin`. |
+| [`cloudflare-d1-drizzle-migration`](skills/cloudflare-d1-drizzle-migration/) | Safely run drizzle-kit migrations on Cloudflare D1 without losing data. Covers the silent `PRAGMA foreign_keys=OFF` incompatibility (D1 ignores it, so table-rebuild migrations cascade-delete child rows), the phased NULLABLE → backfill → NOT NULL column migration pattern for live databases, the mandatory pre-deploy backup + post-deploy row count check runbook, and 3 meta-lessons on environment parity, test blind spots, and destructive-change design review. |
 
 ## Repo layout
 
