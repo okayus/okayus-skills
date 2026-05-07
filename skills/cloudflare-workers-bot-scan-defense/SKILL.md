@@ -24,14 +24,19 @@ This skill captures the mental model, the small set of changes that actually mat
 - You don't currently have observability — i.e., you couldn't answer "how many bot probes hit my Worker last night?" right now
 - Auditing an existing Worker's exposed surface to decide what to harden first
 
-Do **not** use this skill for:
+The exclusions below apply specifically to the **rate-limit binding + middleware** portion of this skill. **Workers Observability (the first artefact in "The minimum viable defense" below) is universally beneficial and should still be enabled even in the cases listed here** — it costs nothing and gives you visibility regardless of how requests are gated.
+
+Do **not** apply the rate-limit binding portion for:
 - A Worker that returns hard 401/403 with no DB hit on every unauthenticated route (you're already fine — bots can't drain you)
+- A Worker fronted by Cloudflare Access / IP allowlist where every route is already gated above the Worker layer (Access returns 302/403 before the Worker is invoked, so there's nothing left to rate-limit). **Caveat**: a custom domain protected by Access does *not* automatically protect the `<worker-name>.<account>.workers.dev` URL — that endpoint stays open by default and bypasses your Access policy. Set `workers_dev: false` in `wrangler.jsonc` to close it (recommended), or attach a separate Access application targeting the `*.workers.dev` hostname (Dashboard → Zero Trust → Access → Applications → Add → Self-hosted, with the workers.dev hostname). Verify with `curl -I https://<worker-name>.<account>.workers.dev/` after deploy — expect a 302 redirect or 403.
 - DDoS-grade attacks (you need WAF / Cloudflare Pro+ rules, not just a Worker binding)
 - Application-level brute force (e.g., trying credentials against a known username) — that's `auth-brute-force` territory and needs per-account lockout, not just per-IP rate limit
 
 ## The mental model — what bots actually drain
 
-Most bot scans target paths that **don't exist** in your app: `/.env`, `/.git/config`, `/wp-admin/`, etc. On a Cloudflare Workers + SPA setup with `not_found_handling: "single-page-application"`, those paths fall through to the SPA fallback (`index.html`) and **the Cloudflare edge caches the response with `cf-cache-status: HIT`**. The Worker doesn't run. D1 isn't touched. CPU isn't billed. **You're already fine for the wordlist 99% of the time.**
+Most bot scans target paths that **don't exist** in your app: `/.env`, `/.git/config`, `/wp-admin/`, etc. On a Cloudflare Workers + SPA setup with `not_found_handling: "single-page-application"`, those paths fall through to the SPA fallback (`index.html`). **After the first Worker invocation for each unique URL, the Cloudflare edge caches the response and serves subsequent requests with `cf-cache-status: HIT` — the Worker is not re-invoked.** Bot scanners hammer the same wordlist URLs, so the long tail is absorbed by edge cache; only the first request per unique path costs you a Worker invocation. D1 isn't touched (the SPA fallback path doesn't touch DB). CPU billing for the cached path stops. **You're already fine for the wordlist 99% of the time.**
+
+This holds regardless of `run_worker_first: true|false`. With `run_worker_first: true`, the first request per path invokes the Worker, which falls through to `c.env.ASSETS.fetch(c.req.raw)` for unknown paths; the response is cacheable and the edge memoizes it. With `run_worker_first: false`, the asset binding serves directly without Worker invocation. Either way, repeat scans hit cache.
 
 What's actually expensive is the small set of **unauthenticated routes that do real work**:
 
