@@ -38,7 +38,7 @@ Each Cloudflare data center maintains its own counter. From a single client IP, 
 
 ### 3. Lazy initialization on first deploy
 
-Anecdotally (not in docs): the binding sometimes appears to take a few minutes after the first deploy to start enforcing reliably. If you deploy and immediately burst-test, expect more passthrough than after the binding has been "warm" for an hour.
+Anecdotally (not in docs): the binding sometimes appears to take time after the first deploy to start enforcing reliably. **Wait at least 30 minutes after the initial deploy before drawing conclusions from a synthetic burst test** — this matches the runbook below. If you burst-test immediately after deploy, expect more passthrough than after the binding has been "warm".
 
 ## What this means for your defense strategy
 
