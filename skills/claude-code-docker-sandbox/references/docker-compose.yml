@@ -1,0 +1,46 @@
+# Drives Anthropic's published devcontainer image (.docker/Dockerfile) without
+# VS Code. Bring up with `docker compose up -d`, then `docker compose exec dev zsh`.
+#
+# Replace <project> below. Adjust the published port to your dev server.
+services:
+  dev:
+    build:
+      context: .docker
+      dockerfile: Dockerfile
+      args:
+        TZ: Asia/Tokyo
+        CLAUDE_CODE_VERSION: latest
+    container_name: <project>-dev
+    # Required so init-firewall.sh can program iptables/ipset.
+    cap_add:
+      - NET_ADMIN
+      - NET_RAW
+    # Non-root so `--dangerously-skip-permissions` is usable; the firewall is the boundary.
+    user: node
+    working_dir: /workspace
+    volumes:
+      # Project bind mount: edit on the host, runs in the container.
+      - ./:/workspace:delegated
+      # Named volumes: Claude auth + shell history survive `docker compose down`.
+      - claude-config:/home/node/.claude
+      - bash-history:/commandhistory
+    environment:
+      NODE_OPTIONS: "--max-old-space-size=4096"
+      CLAUDE_CONFIG_DIR: "/home/node/.claude"
+      # Stops Claude Code reaching telemetry domains (which aren't in the allowlist).
+      CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: "1"
+      POWERLEVEL9K_DISABLE_GITSTATUS: "true"
+      TZ: Asia/Tokyo
+    ports:
+      - "5173:5173" # e.g. Vite dev server; change to match your tool
+    init: true
+    tty: true
+    stdin_open: true
+    # Program the firewall on every start, then keep the container alive.
+    command: >
+      sh -c "sudo /usr/local/bin/init-firewall.sh &&
+             exec sleep infinity"
+
+volumes:
+  claude-config:
+  bash-history:
