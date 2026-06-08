@@ -1,0 +1,106 @@
+---
+name: cloudflare-mcp-claude-tooling
+description: Wire up the Claude Code project tooling for a Cloudflare Workers project developed inside the docker sandbox — a docs-only Cloudflare MCP, a committed `.claude/settings.json` permission allowlist that denies `git commit`/`push` as an execution-level guard for the "git on the host" rule, the egress-firewall domains the docs MCP needs, and the `grill-with-docs` design step. Use when starting a new Cloudflare project (after the sandbox is up) and you want Claude Code's MCP + permissions + design scaffolding set up deliberately. Covers WHY you take docs-only and route account operations through wrangler instead of the bindings/builds/observability MCP servers (OAuth callback is fragile in a container; they overlap with wrangler anyway).
+license: MIT
+compatibility: Designed for Claude Code. Assumes a project already running in the claude-code-docker-sandbox (egress firewall + bind mount). Pairs with cloudflare-workers-deploy-skeleton for the deploy pipeline. wrangler + an OAuth-authenticated Claude Code in the container.
+metadata:
+  author: okayus
+  version: "0.1.0"
+---
+
+# Cloudflare MCP + Claude Code project tooling
+
+Get a new Cloudflare Workers project (already running in the [`claude-code-docker-sandbox`](../claude-code-docker-sandbox/SKILL.md)) to a state where the in-container Claude Code has: the Cloudflare **docs** MCP connected, a **committed permission allowlist** that lets it run pnpm/wrangler/git-read freely while blocking `git commit`/`push`, and the **`grill-with-docs`** design skill available — so you can stress-test the plan before writing the walking skeleton.
+
+This is the layer **between** "the sandbox is up" and "build the walking skeleton" (`cloudflare-workers-deploy-skeleton`).
+
+## When to use this skill
+
+- You just stood up the sandbox for a new Cloudflare Workers project and want the Claude Code tooling configured before coding.
+- You're tempted to add the Cloudflare `bindings`/`builds`/`observability` MCP servers and want the decision framework first.
+- You want the "git stays on the host" rule enforced by configuration, not just documented.
+
+## The core decision: docs-only MCP, account ops via wrangler
+
+Cloudflare ships several hosted MCP servers (`https://*.mcp.cloudflare.com/mcp`). They are **not** equal:
+
+| Server | Auth | Verdict |
+|---|---|---|
+| `cloudflare-docs` (`docs.mcp.cloudflare.com`) | **none** | **Take it.** Searches Cloudflare docs — something `wrangler` cannot do. Connects with no OAuth. |
+| `cloudflare-bindings` (`bindings.mcp.cloudflare.com`) | OAuth | Skip. Overlaps `wrangler d1/kv/r2`. |
+| `cloudflare-builds` (`builds.mcp.cloudflare.com`) | OAuth | Skip. |
+| `cloudflare-observability` (`observability.mcp.cloudflare.com`) | OAuth | Skip. Overlaps `wrangler tail`. |
+
+**Why docs-only:**
+- The account-touching servers **duplicate `wrangler`**, which the in-container agent already runs (allowlisted below). You lose little by leaving them out.
+- Their **OAuth is fragile inside a container.** Claude Code's *login* uses a paste-code flow (no callback) so it works in the sandbox — but **MCP** OAuth redirects to `http://localhost:<port>/callback`, and that "localhost" is the *host*, not the container. The callback port is often dynamic, and the listener may bind container-127.0.0.1, so publishing the port may not even help. Net: high-friction, low-payoff.
+- `docs` needs no auth and is the highest-value server for *writing* Workers/wrangler config correctly.
+
+> If you later genuinely need an account MCP server, prefer **API-token (Bearer header)** auth over the browser flow — Cloudflare's remote servers accept a token (this is how the OpenAI Responses API uses them). Mint a least-privilege token per the [`cloudflare-api-token-permissions`](../cloudflare-api-token-permissions/SKILL.md) matrix and pass it via `headers` with `${ENV}` expansion in `.mcp.json`. Callback-free and sandbox-friendly.
+
+## Files to create (templates in references/)
+
+1. **`.mcp.json`** (project root, **committed**) — docs-only. Copy [references/mcp.json](references/mcp.json).
+   ```json
+   { "mcpServers": { "cloudflare-docs": { "type": "http", "url": "https://docs.mcp.cloudflare.com/mcp" } } }
+   ```
+   Project-scoped MCP servers prompt for a one-time workspace-trust approval the first time Claude Code loads the dir.
+
+2. **`.claude/settings.json`** (project root, **committed**) — copy [references/settings.json](references/settings.json). It allowlists the day-to-day commands so the agent isn't prompted constantly, and **denies `git commit` / `git push`**:
+   ```jsonc
+   "allow": [ "Bash(pnpm install:*)", ..., "Bash(wrangler d1:*)", "Bash(wrangler tail:*)",
+              "Bash(git status:*)", "Bash(git diff:*)", "Bash(gh pr view:*)",
+              "WebFetch(domain:developers.cloudflare.com)", "WebFetch(domain:docs.mcp.cloudflare.com)" ],
+   "deny":  [ "Bash(git push:*)", "Bash(git commit:*)" ]
+   ```
+   The `deny` is the point: it turns "git happens on the host, not in the sandbox" from a CLAUDE.md *convention* into an **execution-level guard** — the in-container agent literally cannot commit/push (keeping GitHub credentials out of the boundary). Allow only the *read* git/gh verbs.
+
+3. **`.gitignore`** additions — keep per-user/secret config out of git:
+   ```
+   docker-compose.override.yml        # host-specific skills mount (see sandbox skill)
+   .claude/settings.local.json        # per-user overrides; .claude/settings.json IS committed
+   ```
+
+4. **Egress firewall domains** — add to the sandbox's `.docker/init-firewall.sh` `for domain in ...` list (then rebuild, see below):
+   ```sh
+   "developers.cloudflare.com" \   # WebFetch of CF docs
+   "docs.mcp.cloudflare.com"       # the docs MCP server
+   ```
+   These can share Cloudflare anycast IPs with other CF hosts — the sandbox template's `ipset -exist` handles that. **Rebuild from the project dir with NO `-f`** so `docker-compose.override.yml` (skills mount) is not dropped:
+   ```sh
+   docker compose down && docker compose build && docker compose up -d
+   ```
+
+## The design step: grill-with-docs
+
+Before the walking skeleton, stress-test the plan. Install [`grill-with-docs`](https://github.com/mattpocock/skills/tree/main/skills/engineering/grill-with-docs) at **project scope** so it travels with the repo and is visible to the in-container agent (it lives under the `/workspace` bind mount):
+
+```sh
+mkdir -p <project>/.claude/skills/grill-with-docs
+# copy SKILL.md + CONTEXT-FORMAT.md + ADR-FORMAT.md from the upstream repo
+```
+
+Then run `/grill-with-docs` and let it interview you one question at a time, capturing vocabulary in `CONTEXT.md` and hard-to-reverse decisions in `docs/adr/NNNN-*.md`. Good first targets: auth method, public/private model, scoring/grading rules — the choices that are expensive to change after code exists.
+
+## Verify
+
+```sh
+# docs MCP connected, account servers absent:
+docker compose exec -T dev claude mcp list | grep cloudflare        # → cloudflare-docs: ... ✓ Connected
+# egress reaches docs, non-allowlisted host still blocked:
+docker compose exec -T dev sh -c 'curl -so/dev/null -w "%{http_code}\n" https://docs.mcp.cloudflare.com/'   # 404 = reachable
+docker compose exec -T dev sh -c 'curl -so/dev/null -w "%{http_code}\n" https://example.com/'               # 000 = blocked
+```
+
+## Gotchas
+
+- **Rebuild from the project dir, no `-f`** — otherwise `docker-compose.override.yml` (host skills mount) silently unloads. See the sandbox skill's Gotchas.
+- **IP-based firewall can't block one anycast host while allowing another** on the same IP (docs vs bindings often share IPs). Removing an account server from the allowlist may still leave it TCP-reachable; what actually keeps it unused is **omitting it from `.mcp.json`**, not the firewall.
+- **`.claude/settings.json` is committed; `.claude/settings.local.json` is per-user** — never commit the latter (gitignored above). Review a project's `settings.json` before trusting the repo, since it can widen tool access.
+- **Project MCP servers need a one-time trust approval** in each fresh checkout (`claude mcp reset-project-choices` to reset).
+
+## Related skills
+
+- [`claude-code-docker-sandbox`](../claude-code-docker-sandbox/SKILL.md) — the egress-firewalled container this runs inside; owns the `init-firewall.sh` allowlist, the skills-mount override, and the `-f` gotcha.
+- [`cloudflare-workers-deploy-skeleton`](../cloudflare-workers-deploy-skeleton/SKILL.md) — the next step: the SPA+API+Cron walking skeleton.
+- [`cloudflare-api-token-permissions`](../cloudflare-api-token-permissions/SKILL.md) — least-privilege tokens, if you opt into Bearer-auth MCP or CI deploys.
