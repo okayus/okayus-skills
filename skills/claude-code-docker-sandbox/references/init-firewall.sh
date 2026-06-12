@@ -85,6 +85,20 @@ done < <(echo "$gh_ranges" | jq -r '(.web + .api + .git)[]' | aggregate -q)
 # or VS Code Marketplace domains here: they can intermittently fail DNS and take
 # the container down, and CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1 (set in the
 # compose file) means Claude Code won't contact them anyway.
+#
+# LANGUAGE TOOLCHAINS: the compiler/runtime itself is installed at image BUILD
+# time (see Dockerfile INSTALL_RUST / INSTALL_HASKELL), before this firewall
+# exists — so toolchain CDNs are NOT listed here. Only the PACKAGE REGISTRIES
+# fetched during development belong below. Uncomment the block for your language:
+#
+#   Rust (cargo):
+#     "index.crates.io"      # sparse dependency index (cargo 1.70+)
+#     "static.crates.io"     # crate tarball downloads
+#   # "static.rust-lang.org" # only if you `rustup update`/add toolchains at runtime
+#
+#   Haskell (cabal):
+#     "hackage.haskell.org"  # package index + tarballs
+#   # "downloads.haskell.org"# only if you `ghcup install` at runtime
 # ─────────────────────────────────────────────────────────────────────────────
 for domain in \
     "registry.npmjs.org" \
@@ -93,9 +107,18 @@ for domain in \
     "dash.cloudflare.com" \
     "workers.cloudflare.com"; do
     echo "Resolving $domain..."
-    ips=$(dig +noall +answer A "$domain" | awk '$4 == "A" {print $5}')
+    # Retry: the embedded Docker DNS can intermittently time out at container
+    # start (worse when several sandboxes resolve at once). A single failed dig
+    # would `exit 1` and kill the container, so try a few times before giving up.
+    ips=""
+    for attempt in 1 2 3 4 5; do
+        ips=$(dig +noall +answer +tries=2 +time=3 A "$domain" | awk '$4 == "A" {print $5}')
+        [ -n "$ips" ] && break
+        echo "  resolve attempt $attempt for $domain failed, retrying in 2s..."
+        sleep 2
+    done
     if [ -z "$ips" ]; then
-        echo "ERROR: Failed to resolve $domain"
+        echo "ERROR: Failed to resolve $domain after 5 attempts"
         exit 1
     fi
 
@@ -105,7 +128,11 @@ for domain in \
             exit 1
         fi
         echo "Adding $ip for $domain"
-        ipset add allowed-domains "$ip"
+        # -exist: some providers (e.g. Cloudflare) serve many hostnames from a
+        # shared anycast IP, so the same IP can already be in the set from an
+        # earlier domain. Without -exist, the duplicate add returns non-zero and
+        # `set -e` kills the container mid-configuration.
+        ipset add -exist allowed-domains "$ip"
     done < <(echo "$ips")
 done
 

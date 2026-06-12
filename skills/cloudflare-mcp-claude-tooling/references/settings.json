@@ -1,0 +1,46 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(pnpm install:*)",
+      "Bash(pnpm add:*)",
+      "Bash(pnpm run:*)",
+      "Bash(pnpm test:*)",
+      "Bash(pnpm dev:*)",
+      "Bash(pnpm build:*)",
+      "Bash(pnpm lint:*)",
+      "Bash(pnpm typecheck:*)",
+      "Bash(pnpm -r:*)",
+      "Bash(pnpm --filter:*)",
+      "Bash(corepack enable:*)",
+      "Bash(corepack prepare:*)",
+      "Bash(node:*)",
+      "Bash(npx:*)",
+      "Bash(tsx:*)",
+      "Bash(wrangler dev:*)",
+      "Bash(wrangler d1:*)",
+      "Bash(wrangler tail:*)",
+      "Bash(wrangler whoami:*)",
+      "Bash(wrangler types:*)",
+      "Bash(git status:*)",
+      "Bash(git diff:*)",
+      "Bash(git log:*)",
+      "Bash(git branch:*)",
+      "Bash(git show:*)",
+      "Bash(git remote -v:*)",
+      "Bash(gh pr view:*)",
+      "Bash(gh pr list:*)",
+      "Bash(gh pr diff:*)",
+      "Bash(gh issue view:*)",
+      "Bash(gh issue list:*)",
+      "Bash(gh api:*)",
+      "WebFetch(domain:code.claude.com)",
+      "WebFetch(domain:developers.cloudflare.com)",
+      "WebFetch(domain:docs.mcp.cloudflare.com)"
+    ],
+    "deny": [
+      "Bash(git push:*)",
+      "Bash(git commit:*)"
+    ]
+  },
+  "enableAllProjectMcpServers": false
+}

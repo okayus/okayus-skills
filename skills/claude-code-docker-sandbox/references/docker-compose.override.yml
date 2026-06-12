@@ -1,0 +1,13 @@
+# LOCAL-ONLY override — gitignore this file.
+#
+# Compose auto-loads docker-compose.override.yml ONLY when you run from the
+# project directory without -f (plain `docker compose up -d`). Passing
+# `-f docker-compose.yml` skips it and the mounts below silently disappear.
+#
+# Purpose: expose a host-side skills repo (a sibling of this project) to the
+# in-container Claude Code as read-only user-scope skills. Single source of
+# truth — no copy into the repo, so no drift. Adjust the source path to yours.
+services:
+  dev:
+    volumes:
+      - ../my-skills/skills:/home/node/.claude/skills:ro
