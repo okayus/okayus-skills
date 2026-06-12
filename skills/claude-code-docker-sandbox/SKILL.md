@@ -1,11 +1,11 @@
 ---
 name: claude-code-docker-sandbox
-description: Set up a Docker Compose-isolated development environment where dependency installs and agent-run code execute behind a default-deny network firewall, never touching the host. Use when starting a Node/TS, Rust, or Haskell project and you want to run `npm install` / `cargo build` / `cabal build`, untrusted dependencies, or Claude Code itself inside a container to contain supply-chain attacks (npm postinstall, Rust build.rs, Haskell Setup.hs) — without depending on VS Code. Reuses Anthropic's published devcontainer Dockerfile + init-firewall.sh but drives them with a plain docker-compose.yml so any host editor (nvim, etc.) works via bind mount; Rust/Haskell toolchains are opt-in build args layered on the node:20 base (Claude Code needs Node regardless). Covers the egress allowlist, the build-time-vs-runtime network distinction, the in-container Claude Code OAuth "paste code" flow, the telemetry-domain DNS trap that kills the firewall, and host-side git operation hygiene.
+description: Set up a Docker Compose-isolated development environment where dependency installs and agent-run code execute behind a default-deny network firewall, never touching the host. Use when you want to run `npm install` / `cargo build` / `cabal build`, untrusted dependencies, or Claude Code itself in a container to contain supply-chain attacks (npm postinstall, Rust build.rs, Haskell Setup.hs) — without depending on VS Code. Reuses Anthropic's published devcontainer Dockerfile + init-firewall.sh, driven by a plain docker-compose.yml so any host editor works via bind mount; Rust/Haskell toolchains are opt-in build args on the node:20 base. Covers the egress allowlist (fatal vs OPTIONAL non-fatal domains), build-time-vs-runtime network, keeping Claude Code current inside the firewall (native updater's host is blocked — update via npm at start), why the /model picker hides flag-gated models until DISABLE_TELEMETRY is unset, bypassPermissions-by-default (container-scope, not repo-shared), and host-side git hygiene.
 license: MIT
 compatibility: Designed for Claude Code and similar agents. Targets Linux/macOS hosts with Docker + Docker Compose v2. Container is node:20 base, non-root `node` user, iptables/ipset egress firewall (needs NET_ADMIN + NET_RAW). Host editor + git stay outside the container; only npm/build/agent execution is isolated.
 metadata:
   author: okayus
-  version: "0.2.0"
+  version: "0.3.0"
 ---
 
 # Claude Code Docker Sandbox
@@ -83,7 +83,9 @@ for domain in \
 - **Cloudflare entries** — only if you deploy to Cloudflare. Drop them otherwise.
 - Add the registry of any other package manager (`registry.yarnpkg.com`), private registries, or CDN hosts your toolchain fetches from at runtime.
 
-> **The telemetry-domain DNS trap.** The script does `exit 1` if *any* listed domain fails to resolve, and that failure kills the container (the firewall is the entrypoint). Anthropic's reference list includes `statsig.anthropic.com`, `sentry.io`, and VS Code Marketplace domains. If one of those intermittently fails DNS, the whole container won't start. **Remove domains you don't need** — for a non-VS-Code, telemetry-off setup, drop the VS Code and Statsig/Sentry entries entirely, and set `CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1` (already in the compose template) so Claude Code doesn't try to reach them anyway.
+> **The telemetry-domain DNS trap — and the OPTIONAL list that defuses it.** The main loop does `exit 1` if *any* listed domain fails to resolve, and that failure kills the container (the firewall is the entrypoint). Anthropic's reference list includes `statsig.anthropic.com`, `sentry.io`, and VS Code Marketplace domains — and `statsig.anthropic.com` **doesn't even exist anymore** (no A record), so blindly copying it guarantees the failure path. The template therefore has a second, **non-fatal OPTIONAL loop**: a failed resolve there logs a WARN and continues. Put nice-to-have egress in it — the real Statsig endpoints (`statsig.com`, `api.statsig.com`, `featuregates.org`, `statsigapi.net`, `prodregistryv2.org` — one shared anycast IP) and **your production hostname**, so the in-container agent can verify its own deploys (`curl /health`). Keep `sentry.io` and VS Code domains out entirely.
+
+> **The /model picker hides flag-gated models — env is the lever, not egress.** The picker's roster is driven by Statsig feature flags. With the `CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1` umbrella set, new flag-gated models (e.g. Fable 5) silently never appear, even though `--model <id>` works (entitlement is server-side). Fix: split the umbrella into its parts — keep `DISABLE_AUTOUPDATER=1`, `DISABLE_FEEDBACK_COMMAND=1`, `DISABLE_ERROR_REPORTING=1`, leave `DISABLE_TELEMETRY` unset (the compose template does this). Empirically the flags arrive via `api.anthropic.com`, so the picker works even if Statsig egress stays blocked; the optional Statsig entries just let the telemetry uploads succeed too.
 
 > **Two robustness fixes are baked into the template** (learned from real failures; keep them):
 > - **`dig` retry.** The embedded Docker DNS can intermittently time out at start — *worse when several sandboxes come up at once*. A single failed `dig` would `exit 1` and kill the container, so the resolve loop retries up to 5×. This is the safety net the telemetry-trap note above warns you need.
@@ -94,6 +96,36 @@ After editing the allowlist you must rebuild, because the script is `COPY`d into
 docker compose down && docker compose build && docker compose up -d
 ```
 ⚠️ Run rebuild/`up` **from the project directory with NO `-f` flag** — see the override-loading trap in [Gotchas](#gotchas).
+
+## Keeping the agent current and autonomous
+
+Three patterns the compose template's startup `command` implements (all learned the
+hard way; each is independently deletable):
+
+1. **Claude Code goes stale unless you update it via npm at container start.** The
+   image bakes whatever `latest` was at *build* time, and the native auto-updater
+   can't fix it: its download host (`downloads.claude.ai`) is outside the egress
+   allowlist by design. New-model support (e.g. Fable 5) ships in new CLI versions,
+   so a stale binary = missing models. The fix uses the already-allowlisted npm
+   registry: `npm i -g @anthropic-ai/claude-code@latest` on every start (the
+   official upgrade path for npm installs — not `npm update -g`), with
+   `DISABLE_AUTOUPDATER=1` kept on so updates stay deterministic (start-time only,
+   never mid-session). Same line reinstalls `pnpm`, which lives in the container
+   layer and vanishes on every recreation (`corepack enable` fails — /usr/local/bin
+   isn't writable by `node`).
+2. **Default model via env**: `ANTHROPIC_MODEL=<alias-or-id>` in the compose
+   `environment` pins the startup model without touching the picker (useful when a
+   flag-gated model hasn't reached the picker yet, or to keep an autonomous loop on
+   a specific tier). `/model` still switches per session.
+3. **bypassPermissions by default — in the right scope.** For unattended loops, the
+   startup command writes `permissions.defaultMode = "bypassPermissions"` into the
+   **container-scope** user settings (`$CLAUDE_CONFIG_DIR/settings.json`, a named
+   volume) with `jq`. Putting it there and *not* in the repo-shared
+   `.claude/settings.json` is the point: the same repo opened on the host keeps
+   normal prompting. This is exactly the setup `bypassPermissions` is documented
+   for (isolated container, OS-level boundary), and **deny rules still apply in
+   bypass mode** — a `Bash(git push:*)` deny keeps holding (pair with the
+   `sandboxed-agent-git-relay` skill for credential-free push/PR/merge).
 
 ## Language toolchains (Rust / Haskell)
 

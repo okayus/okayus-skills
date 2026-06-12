@@ -81,10 +81,12 @@ done < <(echo "$gh_ranges" | jq -r '(.web + .api + .git)[]' | aggregate -q)
 #   *.cloudflare.com    → only if you deploy to Cloudflare; drop otherwise
 # Add e.g. registry.yarnpkg.com, a private registry, or a runtime CDN as needed.
 #
-# Do NOT re-add Anthropic's telemetry domains (statsig.anthropic.com, sentry.io)
-# or VS Code Marketplace domains here: they can intermittently fail DNS and take
-# the container down, and CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1 (set in the
-# compose file) means Claude Code won't contact them anyway.
+# Do NOT add sentry.io or VS Code Marketplace domains here: they can
+# intermittently fail DNS and take the container down (this list is FATAL), and
+# DISABLE_ERROR_REPORTING=1 in the compose file means Claude Code won't contact
+# Sentry anyway. Statsig domains belong in the OPTIONAL list further below.
+# Note: "statsig.anthropic.com" does NOT exist (no A record — stale info that
+# circulates in old allowlists); never add it anywhere.
 #
 # LANGUAGE TOOLCHAINS: the compiler/runtime itself is installed at image BUILD
 # time (see Dockerfile INSTALL_RUST / INSTALL_HASKELL), before this firewall
@@ -132,6 +134,46 @@ for domain in \
         # shared anycast IP, so the same IP can already be in the set from an
         # earlier domain. Without -exist, the duplicate add returns non-zero and
         # `set -e` kills the container mid-configuration.
+        ipset add -exist allowed-domains "$ip"
+    done < <(echo "$ips")
+done
+
+# ─────────────────────────────────────────────────────────────────────────────
+# OPTIONAL domains: nice-to-have egress that must never block container start.
+# The fatal list above exits 1 on a failed resolve and takes the container with
+# it — the historical reason telemetry domains were excluded. Entries here log
+# a WARN and continue instead.
+#   - Statsig endpoints (Claude Code usage telemetry; one shared anycast IP).
+#     The /model picker's flag-gated roster needs DISABLE_TELEMETRY unset in the
+#     compose env, but works even without this egress (flags arrive via
+#     api.anthropic.com) — these entries just let telemetry uploads succeed.
+#   - Add your production hostname here too (e.g. <app>.<account>.workers.dev)
+#     so the in-container agent can verify deploys (curl /health) itself.
+# ─────────────────────────────────────────────────────────────────────────────
+for domain in \
+    "statsig.com" \
+    "api.statsig.com" \
+    "featuregates.org" \
+    "statsigapi.net" \
+    "prodregistryv2.org"; do
+    echo "Resolving optional $domain..."
+    ips=""
+    for attempt in 1 2 3; do
+        ips=$(dig +noall +answer +tries=2 +time=3 A "$domain" | awk '$4 == "A" {print $5}')
+        [ -n "$ips" ] && break
+        echo "  resolve attempt $attempt for optional $domain failed, retrying in 2s..."
+        sleep 2
+    done
+    if [ -z "$ips" ]; then
+        echo "WARN: optional domain $domain not resolved; continuing without it"
+        continue
+    fi
+    while read -r ip; do
+        if [[ ! "$ip" =~ ^[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}$ ]]; then
+            echo "WARN: invalid IP from DNS for optional $domain: $ip (skipped)"
+            continue
+        fi
+        echo "Adding $ip for $domain"
         ipset add -exist allowed-domains "$ip"
     done < <(echo "$ips")
 done

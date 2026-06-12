@@ -10,6 +10,11 @@ services:
       args:
         TZ: Asia/Tokyo
         CLAUDE_CODE_VERSION: latest
+        # Opt-in language toolchains. Enable only what this project uses — leaving
+        # both false reproduces the original Node/TS-only image. Haskell adds
+        # several GB and ~10-20 min to the build, so flip it on only when needed.
+        INSTALL_RUST: "false"
+        INSTALL_HASKELL: "false"
     container_name: <project>-dev
     # Required so init-firewall.sh can program iptables/ipset.
     cap_add:
@@ -27,8 +32,17 @@ services:
     environment:
       NODE_OPTIONS: "--max-old-space-size=4096"
       CLAUDE_CONFIG_DIR: "/home/node/.claude"
-      # Stops Claude Code reaching telemetry domains (which aren't in the allowlist).
-      CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: "1"
+      # Individual flags instead of the CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC
+      # umbrella (= these three + DISABLE_TELEMETRY). Leaving DISABLE_TELEMETRY
+      # unset re-enables ONLY Statsig: its feature flags drive the /model picker
+      # roster (flag-gated models stay hidden otherwise; the flags arrive via
+      # api.anthropic.com, so this works even if Statsig egress is blocked).
+      # Sentry stays off; updates are handled below, not by the auto-updater.
+      DISABLE_AUTOUPDATER: "1"
+      DISABLE_FEEDBACK_COMMAND: "1"
+      DISABLE_ERROR_REPORTING: "1"
+      # Optional: pin the agent's default model (alias or full id).
+      # ANTHROPIC_MODEL: "claude-fable-5"
       POWERLEVEL9K_DISABLE_GITSTATUS: "true"
       TZ: Asia/Tokyo
     ports:
@@ -36,9 +50,28 @@ services:
     init: true
     tty: true
     stdin_open: true
-    # Program the firewall on every start, then keep the container alive.
+    # On every start: program the firewall, refresh global CLIs, enforce container-side
+    # Claude defaults, keep the container alive.
+    # - claude updates via npm (registry.npmjs.org is allowlisted): the native
+    #   auto-updater's download host (downloads.claude.ai) is OUTSIDE the egress
+    #   allowlist, so an image-baked claude silently goes stale without this.
+    # - pnpm lives in the container layer and vanishes on recreation; reinstall it too
+    #   (corepack enable fails: /usr/local/bin isn't writable by node). Drop pnpm
+    #   from the line if the project doesn't use it.
+    # - defaultMode=bypassPermissions goes into the CONTAINER-scope user settings
+    #   (named volume), NOT the repo-shared .claude/settings.json — host sessions
+    #   keep normal prompting. Safe in here: the firewall is the boundary and deny
+    #   rules (e.g. git push) still apply in bypass mode. Delete the jq step if you
+    #   want prompts inside the container.
+    # - No step may kill the container on failure (fall back to image-baked versions).
     command: >
       sh -c "sudo /usr/local/bin/init-firewall.sh &&
+             (npm i -g @anthropic-ai/claude-code@latest pnpm@9.15.0 ||
+              echo 'WARN: claude/pnpm update failed; using image-baked versions') &&
+             ([ -s /home/node/.claude/settings.json ] || echo '{}' > /home/node/.claude/settings.json) &&
+             (jq '.permissions.defaultMode = \"bypassPermissions\"' /home/node/.claude/settings.json > /tmp/cs.json &&
+              mv /tmp/cs.json /home/node/.claude/settings.json ||
+              echo 'WARN: could not set bypassPermissions default') &&
              exec sleep infinity"
 
 volumes:
