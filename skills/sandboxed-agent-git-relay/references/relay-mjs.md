@@ -121,7 +121,11 @@ const isAncestor = (a, b) => {
   }
 };
 
-// three-dot diff vs origin/main: filters empty new branches AND squash-merge residue
+// three-dot diff vs origin/main: filters empty new branches.
+// WARNING: this does NOT detect a squash merge. A three-dot diff shows the
+// branch-side changes, so after the branch is squash-merged (its commits never
+// become ancestors of main) the diff stays non-empty and the branch looks
+// "unmerged" forever. Filtering squash residue is isTipAlreadyMerged's job.
 const hasDiffAgainstMain = (branch) => {
   try {
     git(["diff", "--quiet", `origin/main...${branch}`]);
@@ -129,6 +133,25 @@ const hasDiffAgainstMain = (branch) => {
   } catch {
     return true;
   }
+};
+
+// Has this tip SHA already landed via a merged PR? Because squash merge leaves
+// the branch's commits out of main's ancestry, hasDiffAgainstMain keeps seeing
+// "unmerged" and the relay would re-push -> re-PR -> re-merge every tick,
+// minting an empty squash commit onto main each time (observed 2026-06-13). If a
+// merged PR's head.sha equals the current tip, the content is already on main;
+// the caller then deletes the local branch and stops. This is the loop guard
+// that the local-branch delete in tryMerge alone cannot provide (it fails while
+// the sandbox still has the branch checked out).
+const isTipAlreadyMerged = async (branch, sha, token) => {
+  const owner = CONFIG.repo.split("/")[0];
+  const closed = await githubApi(
+    "GET",
+    `/repos/${CONFIG.repo}/pulls?state=closed&head=${owner}:${encodeURIComponent(branch)}&per_page=30`,
+    null,
+    token,
+  );
+  return closed.some((p) => p.merged_at !== null && p.head.sha === sha);
 };
 
 const pushBranch = (branch, token) => {
@@ -219,9 +242,19 @@ const processBranch = async (name, sha, getToken) => {
     return;
   }
   if (!hasDiffAgainstMain(name)) {
-    return; // nothing to propose (fresh empty branch, or merged residue)
+    return; // nothing to propose (fresh empty branch, or fast-forward-merged residue)
   }
   const token = await getToken();
+  if (await isTipAlreadyMerged(name, sha, token)) {
+    // Squash-merged residue. Do not re-push/PR/merge; clean up the local branch and stop.
+    try {
+      git(["branch", "-D", name]);
+      log(`cleaned squash-merged ${name} (${sha.slice(0, 7)})`);
+    } catch {
+      log(`note: cannot delete local ${name} (checked out in sandbox); it clears once the sandbox switches branch`);
+    }
+    return;
+  }
   if (remote !== sha) {
     pushBranch(name, token);
     log(`pushed ${name} (${sha.slice(0, 7)})`);
