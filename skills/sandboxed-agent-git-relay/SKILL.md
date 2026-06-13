@@ -1,6 +1,6 @@
 ---
 name: sandboxed-agent-git-relay
-description: Let a sandboxed coding agent (Claude Code in a Docker devcontainer with a bind-mounted repo) get its work onto GitHub as branches + PRs — and optionally all the way to MERGE — WITHOUT any credential ever entering the sandbox. A host-side systemd timer detects commits on claude/* branches, mints a 1-hour GitHub App installation token, pushes an exact refspec, opens the PR, and (only when the HEAD commit carries a Relay-Merge trailer) squash-merges it once the ruleset's required checks pass. Policy (branch prefix only, no force, never main, merge-by-explicit-signal) is enforced OUTSIDE the boundary. Use when an autonomous agent loop needs push/PR/merge but the rule is "no plaintext credentials in the sandbox". Covers why GitHub App beats deploy keys and GITHUB_TOKEN (PR CI approval gate), the App ID vs Installation ID confusion, the gh credential-helper hijack, the systemd AccuracySec=1min surprise, and reading PR/CI status from the sandbox with unauthenticated curl (gh refuses to run tokenless).
+description: Let a sandboxed coding agent (Claude Code in a Docker devcontainer with a bind-mounted repo) get its work onto GitHub as branches + PRs — and optionally all the way to MERGE — WITHOUT any credential ever entering the sandbox. A host-side systemd timer detects commits on claude/* branches, mints a 1-hour GitHub App installation token, pushes an exact refspec, opens the PR, and (only when the HEAD commit carries a Relay-Merge trailer) squash-merges it once the ruleset's required checks pass. Policy (branch prefix only, no force, never main, merge-by-explicit-signal) is enforced OUTSIDE the boundary. Use when an autonomous agent loop needs push/PR/merge but the rule is "no plaintext credentials in the sandbox". Covers why GitHub App beats deploy keys and GITHUB_TOKEN (PR CI approval gate), the App ID vs Installation ID confusion, the gh credential-helper hijack, the systemd AccuracySec=1min surprise, the squash-merge re-merge loop (three-dot diff can't detect a squash, so the relay re-merges every tick and mints empty commits — guard on a merged PR's head.sha), and reading PR/CI status from the sandbox with unauthenticated curl (gh refuses to run tokenless).
 license: MIT
 compatibility: Designed for Claude Code and similar agents. Host = Linux with systemd user units, node >= 20, git, gh CLI. Sandbox = Docker container with the repo bind-mounted (host and container share one worktree/.git). Repo on GitHub.
 metadata:
@@ -63,7 +63,7 @@ to git with zero in-sandbox moving parts.
 
 - **Prefix-only**: scans `refs/heads/claude/` and pushes `refs/heads/X:refs/heads/X` exact refspecs. main is structurally unreachable.
 - **No force, ever**: if the remote branch is not an ancestor of the local tip, log `REFUSE` and skip — divergence is for a human to resolve.
-- **Skip when no diff vs `origin/main`** (three-dot diff): empty new branches produce no PR, and **squash-merged residue branches don't resurrect** as empty PRs after merge.
+- **Skip when no diff vs `origin/main`** (three-dot diff): empty new branches produce no PR. ⚠️ This three-dot diff does **NOT** detect a squash merge — filtering squash residue is `isTipAlreadyMerged`'s job (see "The squash-merge re-merge loop" below), not this check's.
 - **Token hygiene**: minted per tick only when needed, down-scoped (`repositories: [repo]`, contents+PR write), passed to git via env + an inline credential helper — never argv, never disk. **Prepend `-c credential.helper=`** (empty) first: without that reset, a globally configured `gh` credential helper silently wins and pushes as the *user*, not the App.
 - **Idempotent PR**: `GET /pulls?head=owner:branch` before `POST`; reruns log "PR exists".
 - **Merge only on explicit signal**: see next section. No trailer → the relay never merges; the human does.
@@ -93,6 +93,31 @@ execution and the policy live outside it.*
   required checks (tests!) as the project matures. Record the governance change in
   an ADR; the revert path is "delete `tryMerge`" — ruleset, App, and sandbox config
   are untouched.
+
+### The squash-merge re-merge loop (the one that bites — fix is mandatory)
+
+`squash` merge does **not** make the branch's commits ancestors of `main`; only
+their *content* lands, as one brand-new commit. So the three-dot diff
+`origin/main...branch` **stays non-empty after a squash merge**, and
+`hasDiffAgainstMain` alone judges the branch "still has unmerged work" forever.
+Combine that with `tryMerge`'s post-merge local-branch delete **failing whenever the
+sandbox still has the branch checked out**, and the relay re-pushes → re-PRs →
+re-squash-merges the same branch **every tick**, minting an empty squash commit onto
+`main` (and firing the deploy) each time. This actually happened: 9 empty commits +
+9 redundant deploys before it was caught (2026-06-13).
+
+**The guard — `isTipAlreadyMerged(branch, sha)`, checked before push:** ask GitHub
+whether a **closed PR with `merged_at` set and `head.sha === the current local tip`**
+already exists. If so, the content is already on `main` → skip push/PR/merge and
+delete the local branch (best-effort). Do **not** rely on `tryMerge`'s cleanup alone:
+it cannot remove a checked-out branch, which is exactly the condition that ignites the
+loop. The three-dot `hasDiffAgainstMain` check stays (it cheaply filters truly-empty
+branches without an API call), but it is **not** the squash filter — this is.
+
+Operational corollaries: (a) after signaling `Relay-Merge`, have the agent `git
+switch` off the branch so the local ref can be reaped next tick; (b) squash residue
+already on `main` (empty commits) can't be removed without rewriting protected history
+— leave it, it's inert. The guard makes the loop impossible regardless of (a).
 
 ## Operations
 
