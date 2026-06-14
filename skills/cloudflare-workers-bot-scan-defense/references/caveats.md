@@ -99,7 +99,8 @@ When a synthetic test fails to produce 429s but the binding is correctly configu
 ## Documented limits and version requirements
 
 - Workers Rate Limiting bindings: GA on Free and Paid plans
-- Wrangler version: **must be 4.36.0 or later** ([docs](https://developers.cloudflare.com/workers/runtime-apis/bindings/rate-limit/))
+- Wrangler version: **4.36.0+** for the top-level `ratelimits` key ([docs](https://developers.cloudflare.com/workers/runtime-apis/bindings/rate-limit/)). On **wrangler 3.x**, use the `unsafe.bindings` (`type: "ratelimit"`) fallback in SKILL.md / configuration.md — same runtime binding, different config shape.
+- **`wrangler versions view` on v3 renders neither the `unsafe` ratelimit binding nor `observability`** (the bindings section stops at D1/KV/vars/secrets). The "What we observed in production" example above showing `env.AUTH_RATE_LIMITER (30 requests/60s) Rate Limit` is wrangler 4.36+ behavior. So on v3, verification check #1 is a false negative even when correctly deployed — confirm via the Dashboard or the credential-free path (SKILL.md → "Verify after deploy"), not `versions view`.
 - `simple.period`: **must be 10 or 60** seconds (other values fail config validation)
 - `simple.limit`: positive integer, no documented upper bound for normal use
 - `namespace_id`: positive integer as a string, account-unique
