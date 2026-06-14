@@ -52,6 +52,27 @@ Full source for the three artefacts. Drop these in and adjust binding names / ro
 }
 ```
 
+### Wrangler 3.x: the `unsafe.bindings` form
+
+The top-level `ratelimits` key requires **wrangler 4.36.0+**. On wrangler 3.x it's rejected; the same binding is reachable through `unsafe.bindings` with `type: "ratelimit"` (the `observability` block above works on 3.x unchanged):
+
+```jsonc
+{
+  "unsafe": {
+    "bindings": [
+      {
+        "name": "AUTH_RATE_LIMITER",
+        "type": "ratelimit",
+        "namespace_id": "1001",
+        "simple": { "limit": 30, "period": 60 }
+      }
+    ]
+  }
+}
+```
+
+The runtime API is identical (`env.AUTH_RATE_LIMITER.limit({ key })`). Trade-offs: `unsafe` bindings skip wrangler's config validation (a typo fails silently), and wrangler 3.x's `wrangler versions view` does **not** print them — so neither the parse step nor the post-deploy CLI check catches a mistake. Verified on `wrangler@3.114.x`. Prefer upgrading to 4.36+; use this only when the upgrade is out of scope, and always pair it with the fail-open middleware below.
+
 ### Picking the limit
 
 For a small app (family / internal / hobby): **30/60s** is comfortable. Real users rarely hit auth endpoints; bots that try will be capped quickly enough.
@@ -113,6 +134,26 @@ export const authRateLimit = createMiddleware<Env>(async (c, next) => {
   await next();
 });
 ```
+
+### Fail-open variant (recommended)
+
+The version above assumes `AUTH_RATE_LIMITER` is always bound. In local dev you typically don't provision it, and with the `unsafe.bindings` form a typo leaves it `undefined` — either way `c.env.AUTH_RATE_LIMITER.limit(...)` throws and the request 500s, turning a limiter problem into a **login outage**. Guard on the binding so it degrades to "no rate limit" instead of failing closed:
+
+```ts
+export const authRateLimit = createMiddleware<Env>(async (c, next) => {
+  const limiter = c.env.AUTH_RATE_LIMITER;
+  if (limiter) {
+    const ip = c.req.header("CF-Connecting-IP") ?? "unknown";
+    const { success } = await limiter.limit({ key: ip });
+    if (!success) {
+      return c.json({ error: { type: "rate_limited", message: "Too many requests" } }, 429);
+    }
+  }
+  await next();
+});
+```
+
+A limiter hiccup must never lock a real user out of logging in — failing open is the right call for a CPU-drain guard (it is *not* the right call for a brute-force lockout, which must fail closed; that's a different layer, see SKILL.md exclusions). Bonus: failing open makes the behavioral burst test interpretable — a 429 can only originate from a live binding, so a 429-when-seen is positive proof the limiter is wired.
 
 ### Why hard-coded vs. parameterised
 
@@ -181,7 +222,7 @@ app.route("/api/auth", authRoutes);            // rate-limit applied per-route
 
 Per the testing philosophy of "unit = meaning, e2e = wiring", the rate-limit middleware does not warrant a unit test — it's pure boundary I/O. The behavior you actually want to verify is "the binding is configured and the middleware is in the bundle", which the verification flow in the main SKILL.md covers via:
 
-1. `wrangler versions view` showing the binding
+1. `wrangler versions view` showing the binding (wrangler 4.36+ only — v3 doesn't render the `unsafe` ratelimit binding; on v3 use the Dashboard or the credential-free path in SKILL.md → "Verify after deploy")
 2. `grep` of the production bundle for `rate_limited`
 3. Workers Observability showing the trigger
 

@@ -1,11 +1,11 @@
 ---
 name: cloudflare-workers-bot-scan-defense
-description: Make a Cloudflare Workers app resilient to bot scans that arrive within minutes of HTTPS publication via CT Log enumeration. Use when deploying a new Worker (especially with auth or paid bindings), when budget/cost is a concern, or when you want to detect "/.env" / "/admin" / "/wp-login.php" / "/.git/config" probing. Covers the mental model (CT Log → bot scan → which paths actually cost you money), the edge-cache absorption that makes most scans free, the narrow set of unauthenticated routes that do need rate limiting (auth `begin`/`verify`), the exact `wrangler.jsonc` `observability` + `ratelimits` config, the IP-keyed Hono middleware pattern, the verification flow via `wrangler versions view` + Workers Observability, and the documented eventual-consistency caveat that makes synthetic burst tests look like the limiter is broken.
+description: Make a Cloudflare Workers app resilient to bot scans that arrive within minutes of HTTPS publication via CT Log enumeration. Use when deploying a new Worker (especially with auth or paid bindings), when budget/cost is a concern, or when you want to detect "/.env" / "/admin" / "/wp-login.php" / "/.git/config" probing. Covers the mental model (CT Log → bot scan → which paths actually cost you money), the edge-cache absorption that makes most scans free, the narrow set of unauthenticated routes that do need rate limiting (auth `begin`/`verify`), the exact `wrangler.jsonc` `observability` + `ratelimits` config (plus the wrangler 3.x `unsafe.bindings` fallback for projects still on v3), the IP-keyed Hono middleware pattern (with the fail-open variant), the verification flow via `wrangler versions view` + Workers Observability — including the trap that v3's `versions view` renders neither the `unsafe` ratelimit binding nor `observability`, and a credential-free verification path for sandboxed agents / keyless CI — and the documented eventual-consistency caveat that makes synthetic burst tests look like the limiter is broken.
 license: MIT
-compatibility: Designed for Claude Code and similar agents. Targets Cloudflare Workers (Free or Paid) with `@cloudflare/workers-types@4.20240000+`, `wrangler@^4.36.0`, Hono / D1 / R2 stacks, and either `*.workers.dev` or a custom domain. Workers Rate Limiting binding is GA on both Free and Paid; Workers Observability requires enabling per-Worker via `wrangler.jsonc`.
+compatibility: Designed for Claude Code and similar agents. Targets Cloudflare Workers (Free or Paid) with `@cloudflare/workers-types@4.20240000+`, `wrangler@^4.36.0` (the top-level `ratelimits` key), Hono / D1 / R2 stacks, and either `*.workers.dev` or a custom domain. Projects still on **wrangler 3.x** can use the `unsafe.bindings` fallback in "Add a Workers Rate Limit binding" below. Workers Rate Limiting binding is GA on both Free and Paid; Workers Observability requires enabling per-Worker via `wrangler.jsonc`.
 metadata:
   author: okayus
-  version: "0.1.0"
+  version: "0.2.0"
 ---
 
 # Cloudflare Workers Bot Scan Defense
@@ -114,6 +114,28 @@ Add to `wrangler.jsonc`:
 
 `namespace_id` is an account-unique integer string (any number you pick). `simple.period` **must be 10 or 60** — other values fail config validation. Two bindings sharing the same `namespace_id` share counters, which is intentional if you want "one rate limit across multiple Workers".
 
+#### Wrangler 3.x fallback (no top-level `ratelimits` key)
+
+The top-level `ratelimits` key above requires **wrangler 4.36.0+**. On a project still on **wrangler 3.x**, that key is rejected — but the same binding is available through the `unsafe.bindings` escape hatch with `type: "ratelimit"`. The runtime binding is identical (`env.AUTH_RATE_LIMITER.limit(...)`); only the config shape differs:
+
+```jsonc
+{
+  // wrangler 3.x: top-level `ratelimits` is unsupported — use the unsafe form.
+  "unsafe": {
+    "bindings": [
+      {
+        "name": "AUTH_RATE_LIMITER",
+        "type": "ratelimit",
+        "namespace_id": "1001",
+        "simple": { "limit": 30, "period": 60 }
+      }
+    ]
+  }
+}
+```
+
+This is verified working on `wrangler@3.114.x`. Note the cost: `unsafe` bindings are **not validated** by wrangler at config-parse time, and (see "Verify after deploy") wrangler 3.x's `versions view` does **not** render them — so a typo here fails silently. Prefer upgrading to 4.36+ and the top-level form when you can; use this only when the upgrade is out of scope. Pair it with the **fail-open middleware** (below) so a missing/misnamed binding degrades to "no rate limit" rather than locking every user out.
+
 `RateLimit` is a **global type** from `@cloudflare/workers-types` — no import needed in a worker tsconfig. Add it to your Bindings:
 
 ```ts
@@ -149,6 +171,20 @@ export const authRoutes = new Hono<Env>()
 
 Don't apply it to authenticated routes — `sessionMiddleware` already gates those, and rate-limiting authenticated requests adds a fragile failure mode where one busy family member knocks themselves offline.
 
+**Fail-open variant.** The snippet above assumes the binding always exists; in local dev (where you don't provision the binding) or if the binding is ever absent/misnamed, `c.env.AUTH_RATE_LIMITER` is `undefined` and `.limit()` throws — turning a limiter hiccup into a login outage. Guard on the binding so it degrades to "no limit" instead. This also makes the behavioral burst test interpretable (see "Verify after deploy"): with fail-open, a 429 can *only* come from a live binding, so a 429-when-seen is positive proof it's wired.
+
+```ts
+export const authRateLimit = createMiddleware<Env>(async (c, next) => {
+  const limiter = c.env.AUTH_RATE_LIMITER;
+  if (limiter) {                                   // fail OPEN if absent
+    const ip = c.req.header("CF-Connecting-IP") ?? "unknown";
+    const { success } = await limiter.limit({ key: ip });
+    if (!success) return c.json({ error: { type: "rate_limited" } }, 429);
+  }
+  await next();
+});
+```
+
 Full implementation walkthrough in [references/configuration.md](references/configuration.md).
 
 ## Verify after deploy
@@ -158,8 +194,10 @@ Three checks, in order:
 ```bash
 # 1. The binding appears in the deployed worker's binding list
 pnpm exec wrangler versions view <version-id> --name <worker-name> | grep -E 'Rate Limit|Observability'
-# Expected: env.AUTH_RATE_LIMITER (30 requests/60s)    Rate Limit
+# Expected (wrangler 4.36+): env.AUTH_RATE_LIMITER (30 requests/60s)    Rate Limit
 ```
+
+> ⚠ **Wrangler 3.x renders neither `unsafe` ratelimit bindings nor `observability` in `versions view`.** On v3 the output lists only D1/KV/vars/secrets, so this check shows **nothing for the rate limiter even when it is correctly deployed** — a false negative, not a missing binding. (Run `wrangler versions view <id>` and you'll see the bindings section stop at `d1_databases`.) On v3, confirm via the **Dashboard** instead — Workers & Pages → `<worker>` → Settings → Bindings shows `AUTH_RATE_LIMITER`, and the Observability tab shows whether observability is on — or use the credential-free path below. This is the verification flow the `unsafe` fallback breaks; budget for it if you can't upgrade to 4.36+.
 
 ```bash
 # 2. Observability captures the route as a $metadata.trigger
@@ -174,6 +212,16 @@ grep -c "AUTH_RATE_LIMITER\|rate_limited" dist/<your-worker>/index.js
 ```
 
 If 1 + 2 + 3 all pass, you're correctly configured **even if the next step (synthetic burst test) doesn't return 429**. See the next section.
+
+### Verifying without Cloudflare credentials (sandboxed agents / keyless CI)
+
+Checks 1 and 2 above need an authenticated Cloudflare session (`wrangler versions view`, the Dashboard). If your deploy pipeline is *keyless* — e.g. Cloudflare Workers Builds plus a sandboxed agent that deliberately holds **no** Cloudflare credential — you cannot run them, and that's by design, not a gap to paper over: reading deployed account state is exactly the operation the credential boundary exists to gate. The blocker is the absent credential, **not** egress (a locked-down sandbox can still reach `api.cloudflare.com` and your prod host if they're allowlisted). Verify these ways instead, no credential required:
+
+- **Source + pipeline truth.** The deployed config *is* `wrangler.jsonc` in the merged branch, built by your git-connected CI. Read the `observability` / `ratelimits` (or `unsafe.bindings`) block and the consuming middleware, then confirm the build is green over unauthenticated GitHub REST: `curl -s https://api.github.com/repos/<owner>/<repo>/commits/<branch>/check-runs` and look for your build check `conclusion: success`. Config-in-VCS + green keyless build ⇒ deployed.
+- **Behavioral black-box for the rate limiter.** Burst the protected route from one IP and watch for `429`: `for i in $(seq 1 40); do curl -s -o /dev/null -w '%{http_code}\n' https://<host>/<protected-route>; done | sort | uniq -c`. **A 429 is positive proof the binding is live and enforcing** — decisive with the fail-open middleware (no binding ⇒ it can never 429). The converse does *not* hold: **no 429 is inconclusive**, because Workers Rate Limiting is eventually consistent and per-colo (see "The synthetic burst test caveat"). So treat 429-seen as a green check and absence as "unknown, fall back to source+pipeline".
+- **Observability is not externally observable.** Whether `observability.enabled` is live can't be probed from outside — no black-box signal exists. Confirm it from `wrangler.jsonc` + a green build, or accept that the live on/off state needs the Dashboard / an authenticated session (host-side).
+
+The takeaway: the *goal* ("did rate-limit + observability ship?") is almost entirely answerable credential-free; only the live-state reads that genuinely require an account session stay on the authenticated side.
 
 ## The synthetic burst test caveat (read this before debugging)
 
