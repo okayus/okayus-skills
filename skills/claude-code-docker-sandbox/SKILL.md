@@ -144,6 +144,7 @@ The firewall is the container **entrypoint** — it runs at `docker compose up`,
 | | Installed/fetched | Needs firewall allowlist entry? |
 |---|---|---|
 | Compiler/runtime (rustc, GHC, cabal) | build time (`Dockerfile RUN`) | **No** — CDN reached before firewall exists |
+| Browser binary (Playwright Chromium) | build time (`playwright install --with-deps chromium`) | **No** — baked into the image, never re-fetched at runtime |
 | Dependencies (`cargo build`, `cabal build`) | runtime, in-container | **Yes** — registry must be allowlisted |
 
 So in `init-firewall.sh` you add only the **package registries**, not the toolchain CDNs:
@@ -151,6 +152,13 @@ So in `init-firewall.sh` you add only the **package registries**, not the toolch
 - **Haskell** → `hackage.haskell.org` (add `downloads.haskell.org` only if you `ghcup install` at runtime)
 
 The commented blocks are already in `init-firewall.sh`; uncomment your language and rebuild (the script is `COPY`d into the image). And the attack you care about — `build.rs` / `Setup.hs` running arbitrary code — fires at **runtime**, where the firewall *is* active. That's the whole point.
+
+The browser row generalizes the same move: anything whose network need is **only at build
+time** (a toolchain, a browser, apt-installed system libs) can be baked into the image and
+then used at runtime without ever widening the egress allowlist. For the worked example —
+baking Playwright Chromium so a full e2e suite runs in-container with zero runtime egress
+(plus the `--no-sandbox` gate the missing `SYS_ADMIN` cap forces) — see the
+`cloudflare-workers-e2e-playwright` skill.
 
 ### Warnings
 - **Haskell is heavy**: GHC adds several GB and ~10–20 min to the first build. Enable `INSTALL_HASKELL` only on Haskell projects.
