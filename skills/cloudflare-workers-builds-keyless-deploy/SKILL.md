@@ -1,11 +1,11 @@
 ---
 name: cloudflare-workers-builds-keyless-deploy
-description: Deploy Cloudflare Workers from GitHub with ZERO Cloudflare credentials stored in GitHub (no CLOUDFLARE_API_TOKEN in Actions secrets), using Workers Builds — Cloudflare's git-connected CI/CD. Use when setting up or migrating a Workers project so that an autonomous agent pipeline never holds a Cloudflare secret, or when asked "can we deploy without a CF API token in CI". Covers the traps that cost hours — the default build token lacking D1 Edit (with silent migration failure), Root directory hiding in the Advanced settings accordion, preview builds sharing the PRODUCTION D1 database, and Workers Builds NOT waiting for GitHub CI (gate with a branch ruleset instead).
+description: Deploy Cloudflare Workers from GitHub with ZERO Cloudflare credentials stored in GitHub (no CLOUDFLARE_API_TOKEN in Actions secrets), using Workers Builds — Cloudflare's git-connected CI/CD. Use when setting up or migrating a Workers project so that an autonomous agent pipeline never holds a Cloudflare secret, or when asked "can we deploy without a CF API token in CI". Covers the traps that cost hours — the default build token lacking D1 Edit (with silent migration failure), Root directory hiding in the Advanced settings accordion, preview builds sharing the PRODUCTION D1 database, and Workers Builds NOT waiting for GitHub CI (gate with a branch ruleset instead), telling a build that never triggered (missing Workers Builds check-run) from one that failed, and skipping docs-only deploys with build watch paths.
 license: MIT
 compatibility: Designed for Claude Code and similar agents. Targets Cloudflare Workers (wrangler.jsonc) + D1 + pnpm monorepos, GitHub repos. Requires gh CLI for ruleset setup; dashboard access for the one-time ceremony.
 metadata:
   author: okayus
-  version: "0.1.0"
+  version: "0.2.0"
 ---
 
 # Cloudflare Workers Builds: Keyless Deploy
@@ -53,6 +53,7 @@ Each step once, by a human (these create/handle credentials):
 | Deploy command | `pnpm exec wrangler d1 migrations apply <DB_NAME> --remote && pnpm exec wrangler deploy` | migrations must precede deploy; `pnpm exec` uses the repo-pinned wrangler |
 | API token | custom token incl. **D1 Edit** | the auto-generated default build token has **no D1 permission**, and wrangler d1 migrations are known to **fail silently / opaquely** on permission errors (workers-sdk #5077) — a red build with no clear error usually means this |
 | Branch control | production branch = `main`; **non-production branch builds OFF** | ⚠️ preview versions share the **production D1 binding** (`preview_database_id` applies only to `wrangler dev`, not uploaded versions) — PR previews would hit prod data, and a preview running migrations would migrate prod |
+| Build watch paths (Advanced) | default `*` = build everything; to skip docs-only deploys, **exclude** `docs/*` and `*.md` (keep include `*`) | excludes are evaluated first and match only docs/markdown, so a code change is **never** skipped and a mixed commit still builds; safe because the required `ci` check is **independent** of Workers Builds (still runs, still gates merge). Do NOT skip CI via `paths-ignore` — the required check goes pending and the PR sticks. Always builds on 0-change / 3000+ files / 20+ commits. Dashboard-only (not in wrangler.jsonc). |
 
 Plan limits (2026-06): Free = 3,000 build min/month, 1 concurrent build, 20 min timeout — plenty for a solo project.
 
@@ -71,9 +72,11 @@ curl https://<worker>.<subdomain>.workers.dev/health
 
 Note: workers.dev URLs are always `<worker-name>.<account-subdomain>.workers.dev` — a bare `<name>.workers.dev` does not exist. If the account subdomain matters (OAuth redirect URIs, WebAuthn RP_ID), decide/rename it **before** registering those, since renaming changes every Worker URL in the account.
 
+Build status lives in the **`Workers Builds: <worker>` check-run** above — that plus `wrangler deployments list` is how you read pass/fail/queued from the CLI. The Workers **Builds REST API** (`/accounts/<id>/builds/*`) is **not** reachable with a `wrangler login` OAuth token (returns `10000` *Authentication error* — a real route the token lacks scope for, vs `7003` for a bogus path), and `wrangler` has no `builds` subcommand. For queued/running/failed detail beyond the check-run, use the dashboard **Builds** tab — the **Version history** tab lists only *successful* deploys, never failures/skips.
+
 ## Failure modes seen in the wild
 
 - **Build fails immediately, weird path errors** → Root directory not set (it's in Advanced settings).
 - **Build green until migration step, opaque exit** → default build token without D1 Edit. Swap token in Settings → Build, Retry.
-- **Nothing builds on push** → repo connected but the push was to a non-production branch with branch builds off (intended), or watch-paths excluded everything.
+- **Nothing builds on push** → (a) push to a non-production branch with branch builds off (intended); (b) watch-paths excluded everything (see *Settings*); or (c) a **transient missed trigger** — even with a healthy connection, a production-branch merge, and watch-paths=`*`, Cloudflare occasionally creates **no build at all** for a commit. Diagnose with the commit's check-runs: a built commit carries a **`Workers Builds: <worker>`** check-run (app `cloudflare-workers-and-pages`); if only `ci` is present the build was **never triggered** — distinct from a *failed* check-run (built then failed). `gh api repos/<owner>/<repo>/commits/<sha>/check-runs --jq '.check_runs[].name'`. **Re-trigger by pushing a new commit to `main`** — retrying the latest build in the dashboard rebuilds *that* commit, not the missed one. (Don't read `commits/<sha>/status` `total_count:0` as "no signal" — Workers Builds & Actions both report via the Checks API, not legacy statuses.)
 - **Deploy succeeded but old code serves** → check `wrangler deployments list`; the dashboard build log tells you which commit was built.
