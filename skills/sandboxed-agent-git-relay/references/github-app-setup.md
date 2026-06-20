@@ -8,9 +8,12 @@ github.com/settings/apps/new:
 - Homepage URL: the repo URL (required field, anything works)
 - **Webhook → uncheck "Active"** (the relay polls locally; no webhook, no URL needed)
 - Repository permissions: `Contents: Read and write`, `Pull requests: Read and write`
-  (Metadata: Read-only is added automatically). Add `Workflows: Read and write`
-  ONLY if agent PRs may modify `.github/workflows/**` — pushes touching workflow
-  files are rejected without it.
+  (Metadata: Read-only is added automatically). **Do NOT add `Workflows: Read and
+  write`.** Withholding it is the point: GitHub then rejects any push touching
+  `.github/workflows/**`, so the agent pipeline cannot modify its own CI gate (the
+  merge backstop). The relay surfaces that as a `REFUSE`; land workflow changes with
+  a human-credentialed push instead (see SKILL.md "Relay policy decisions"). Add it
+  only if you deliberately want agent-authored workflow edits.
 - "Where can this GitHub App be installed?" → **Only on this account**
 - After create: note the **App ID** (General tab), **Generate a private key**
   (.pem downloads), then left menu **Install App** → **Only select repositories**
