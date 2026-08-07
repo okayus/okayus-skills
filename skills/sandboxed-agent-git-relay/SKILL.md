@@ -50,7 +50,7 @@ to git with zero in-sandbox moving parts.
 
 ## Setup
 
-1. **Create the App** (human, browser): github.com/settings/apps/new → name like `<project>-relay`; Homepage URL = the repo; **uncheck Webhook Active**; Repository permissions: `Contents: Read and write`, `Pull requests: Read and write`; "Only on this account". Then **Generate a private key** (.pem downloads) and **Install App** → only the target repo.
+1. **Create the App** (human, browser): github.com/settings/apps/new → name like `<project>-relay`; Homepage URL = the repo; **uncheck Webhook Active**; Repository permissions: `Contents: Read and write`, `Pull requests: Read and write` (+ `Workflows: Read and write` **only** if the agent will touch `.github/workflows/**` — pushes containing workflow changes are rejected without it, see [references/github-app-setup.md](references/github-app-setup.md)); "Only on this account". Then **Generate a private key** (.pem downloads) and **Install App** → only the target repo.
 2. **Store the key on the host, outside every container mount**: `~/.config/<project>-relay/app.pem`, dir 700 / file 600. Sanity: `openssl rsa -in app.pem -check -noout`.
 3. **Record IDs** in `config.env` next to the key — see [references/github-app-setup.md](references/github-app-setup.md) for the config template, the JWT smoke test, and the **App ID vs Installation ID trap** (the number in the install URL is the *installation* id; the App ID is on the App settings page; `GET /apps/<slug>` 404s for private apps, and `/user/installations` needs an App user token — so verify by minting a JWT and calling `GET /app` + `GET /app/installations`).
 4. **Install the relay**: [references/relay-mjs.md](references/relay-mjs.md) → `~/.config/<project>-relay/relay.mjs`. ⚠️ Keep it **outside the repo** — the repo is writable from the sandbox, so in-repo policy code could be edited by the thing it polices.
@@ -138,7 +138,7 @@ no trailer → human merges, as before.
 1. In the container: `git checkout -b claude/e2e-test`, commit a doc tweak, `git checkout main`.
 2. Within ~70s the journal shows `pushed claude/e2e-test` + `PR created: <url>`; PR author is `app/<project>-relay`.
 3. CI runs on the PR with no approval prompt and goes green.
-4. Merge (human) → branch auto-deleted; relay's next tick skips the residue (no diff vs main); deploy pipeline (e.g. Workers Builds) fires off main.
+4. Merge (human) → branch auto-deleted; relay's next tick skips the residue via the `isTipAlreadyMerged` guard (a squash leaves the three-dot diff **non-empty**, so "no diff vs main" is not what saves you — see the squash-merge re-merge loop above); deploy pipeline (e.g. Workers Builds) fires off main.
 
 **Merge-delegation variant** (proves the trailer path end-to-end):
 
