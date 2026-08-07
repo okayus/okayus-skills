@@ -1,6 +1,6 @@
 ---
 name: cloudflare-api-token-permissions
-description: Map a Cloudflare CI deploy auth error (code 10000 / 7403 / 9106) to the missing API token permission, and show how to extend the token in-place without regenerating its value (so the GitHub Secret stays untouched). Use when `wrangler deploy` or `wrangler d1 migrations apply` fails in GitHub Actions with `Authentication error`, or when adding a new binding (`r2_buckets` / `kv_namespaces` / `queues` / `vectorize` / `hyperdrive`) to `wrangler.jsonc` and the deploy starts failing in CI even though it works locally. Covers the permission matrix per binding, the "Edit Cloudflare Workers" template's silent omission of D1 / R2 / Queues, and the diagnostic flow when multiple permissions are missing.
+description: Map a Cloudflare CI deploy auth error (code 10000 / 7403 / 9106) to the missing API token permission, and show how to extend the token in-place without regenerating its value (so the GitHub Secret stays untouched). Use when `wrangler deploy` or `wrangler d1 migrations apply` fails in GitHub Actions with `Authentication error`, or when adding a new binding (`r2_buckets` / `kv_namespaces` / `queues` / `vectorize` / `hyperdrive`) to `wrangler.jsonc` and the deploy starts failing in CI even though it works locally. Covers the permission matrix per binding, the "Edit Cloudflare Workers" template's silent omission of D1 / Queues / Vectorize, and the diagnostic flow when multiple permissions are missing.
 license: MIT
 compatibility: Designed for Claude Code and similar agents. Targets any project that uses `wrangler deploy` via GitHub Actions with a Cloudflare account-level API Token in the `CLOUDFLARE_API_TOKEN` secret.
 metadata:
@@ -19,7 +19,7 @@ Adding a binding to `wrangler.jsonc` doesn't fail locally (your `wrangler login`
 - A CI `wrangler deploy` job that previously succeeded now fails with `Authentication error [code: 10000]` / `[code: 7403]` / `[code: 9106]`
 - You're about to add a binding (`r2_buckets`, `kv_namespaces`, `queues`, `vectorize`, `hyperdrive`, `ai`, `browser`) to `wrangler.jsonc` and want to predict whether the token needs an extension
 - Token rotation: the secret value leaked or expired and needs replacement
-- You used the **`Edit Cloudflare Workers` template** to create a token and need to verify what's actually included (it omits D1 / R2 / Queues — see below)
+- You used the **`Edit Cloudflare Workers` template** to create a token and need to verify what's actually included (it omits D1 / Queues / Vectorize — see below)
 
 ## Error code → missing permission
 
@@ -30,7 +30,7 @@ Adding a binding to `wrangler.jsonc` doesn't fail locally (your `wrangler login`
 | `Authentication failed [code: 9106]` | `/memberships` | `Account / Account Settings / Read` (typically a follow-on after the first failure) |
 | `Authentication error [code: 10000]` | `/accounts/<id>/workers/scripts/<name>` | `Account / Workers Scripts / Edit` |
 | `Authentication error [code: 10000]` | `/accounts/<id>/storage/kv/namespaces/<id>` | `Account / Workers KV Storage / Edit` |
-| `Authentication error [code: 10000]` | `/accounts/<id>/queues/<id>` | `Account / Workers Queues / Edit` |
+| `Authentication error [code: 10000]` | `/accounts/<id>/queues/<id>` | `Account / Queues / Edit` |
 
 **The first error in the log is the actionable one**; subsequent errors (especially `code: 9106` on `/memberships`) are usually consequences of the first failed auth call. Fix the first one and the rest disappear.
 
@@ -43,7 +43,7 @@ Adding a binding to `wrangler.jsonc` doesn't fail locally (your `wrangler login`
 | `wrangler d1 export --remote` (backup) | `Account / D1 / Edit` (Read may suffice; Edit is the safe pick) |
 | `r2_buckets` binding (existence check on deploy) | `Account / Workers R2 Storage / Edit` |
 | `kv_namespaces` binding | `Account / Workers KV Storage / Edit` |
-| `queues_producers` / `queues_consumers` binding | `Account / Workers Queues / Edit` |
+| `queues.producers` / `queues.consumers` binding | `Account / Queues / Edit` |
 | `vectorize` binding | `Account / Vectorize / Edit` |
 | `hyperdrive` binding | `Account / Hyperdrive / Edit` |
 | `ai` (Workers AI) binding | `Account / Workers AI / Read` |
@@ -60,21 +60,23 @@ For the typical small-app stack (SPA + API + D1 + R2 served from one Worker), th
 
 ## The "Edit Cloudflare Workers" template trap
 
-Cloudflare offers a one-click template named **`Edit Cloudflare Workers`**. It looks complete but **silently omits D1, R2, Queues, and Vectorize** — these were added to the platform after the template was set, and the template has not been updated.
+Cloudflare offers a one-click template named **`Edit Cloudflare Workers`**. It looks complete but **silently omits D1, Queues, and Vectorize** — products added after the template was originally set. (The template does get occasional refreshes — R2 is included nowadays — so re-verify against the [template reference](https://developers.cloudflare.com/fundamentals/api/reference/template/) when in doubt.)
 
-What the template includes:
+What the template includes (verified 2026-08-07):
 
 - `Workers Scripts / Edit`
 - `Workers KV Storage / Edit`
+- `Workers R2 Storage / Edit`
 - `Workers Tail / Read`
 - `Workers Routes / Edit`
 - `Account Settings / Read`
+- `User Details / Read` (User scope)
+- `Memberships / Read` (User scope)
 
 What you must add manually if your `wrangler.jsonc` uses them:
 
 - `D1 / Edit`
-- `Workers R2 Storage / Edit`
-- `Workers Queues / Edit`
+- `Queues / Edit`
 - `Vectorize / Edit`
 - `Hyperdrive / Edit`
 
@@ -139,3 +141,4 @@ In that case:
 - [`cloudflare-workers-deploy-skeleton`](../cloudflare-workers-deploy-skeleton/SKILL.md) — initial project setup. The token created during that skill should already follow this matrix from day 1; consult this skill when adding new bindings later.
 - [`cloudflare-d1-drizzle-migration`](../cloudflare-d1-drizzle-migration/SKILL.md) — D1 migration pitfalls (`PRAGMA foreign_keys=OFF` ignored). Needs `D1 / Edit`.
 - [`cloudflare-d1-weekly-backup-via-pr`](../cloudflare-d1-weekly-backup-via-pr/SKILL.md) — weekly D1 backup workflow. Reuses the same `CLOUDFLARE_API_TOKEN` (no new token needed if the matrix is met).
+- [`cloudflare-workers-builds-keyless-deploy`](../cloudflare-workers-builds-keyless-deploy/SKILL.md) — the alternative that removes this whole problem class: deploy via Workers Builds with **no** Cloudflare token in GitHub at all. Its default build token has the same flavor of trap (D1 Edit missing).
