@@ -20,11 +20,11 @@ Replace a `ctx.waitUntil(longJob())` call with a Cloudflare Workflow when the jo
 - DB rows get stuck in `running` / `pending` because the kill is abrupt — your `try/catch` for marking them `failed` never runs
 - A long task needs **automatic retry** (e.g., flaky third-party API), and you don't want to hand-roll exponential backoff inside a 30s budget
 - A job has natural **steps** that you want to checkpoint individually (download → transform → upload → notify), so a partial failure doesn't redo finished steps
-- You want a UI to **inspect** the in-flight job (Cloudflare Dashboard shows each step's status; `step.do()` outputs are persisted to D1-backed storage)
+- You want a UI to **inspect** the in-flight job (Cloudflare Dashboard shows each step's status; `step.do()` outputs are durably persisted by the Workflows runtime)
 
 Do **not** use for:
 - Tasks that genuinely fit in 30 seconds — `ctx.waitUntil()` is simpler, no extra binding, no class export
-- Fan-out / queue-style work that doesn't need per-message durability — use **Cloudflare Queues** (consumer is still bound by 30s per message but messages can fan out)
+- Fan-out / queue-style work — use **Cloudflare Queues** (a consumer invocation gets up to 15 min wall clock, 30s CPU by default / 5 min max — see [Queues limits](https://developers.cloudflare.com/queues/platform/limits/)). Pick Queues for many small independent jobs, Workflows for one durable multi-step job with checkpoints
 - Real-time streaming responses to a client — Workflows run **after** the response is sent; for streaming use SSE / WebSockets directly in the fetch handler
 
 ## The 30s ceiling — and why it's worse than you'd expect
@@ -157,7 +157,7 @@ Keep the export file in `backups/` (gitignored) for at least one release cycle. 
 This skill does **NOT** cover:
 
 - **Workers AI input shapes / model selection** — Workflows give you durable execution and visibility into errors, but the analyzer logic itself is orthogonal. If you migrate to Workflows and the inner work still fails, fix it in the analyzer, not in the workflow plumbing
-- **Cloudflare Queues** — different abstraction (per-message consumer, still 30s per message). Use Queues when you have many small jobs that fan out, Workflows when you have one durable job per request
+- **Cloudflare Queues** — different abstraction (batch consumer; 15 min wall clock per invocation, CPU 30s default / 5 min max). Use Queues when you have many small jobs that fan out, Workflows when you have one durable job per request
 - **Workflow signal events / external triggers** — `step.waitForEvent` exists, but skeleton migration doesn't need it; cover it when you actually need approval / webhook gates
 - **`vp dev` / local Workflow emulation** — limited; this skill assumes verification happens against a deployed Worker. Local dev can still trigger `env.MY_WORKFLOW.create()` calls but the inner steps may behave differently
 - **Hono `c.executionCtx` vs Workers raw `ctx`** — the migration replaces `c.executionCtx.waitUntil(...)` (or `ctx.waitUntil(...)`) with `c.env.MY_WORKFLOW.create(...)` either way; whichever framework you use, the call site change is the same

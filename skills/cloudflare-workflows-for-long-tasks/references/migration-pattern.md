@@ -256,4 +256,4 @@ Keep this script local; once run, delete it. Don't commit "one-time migration to
 - **"Just bump the timeout."** There is no longer timeout. `ctx.waitUntil` is hard-capped at 30s.
 - **"Retry on the client side."** The post-response task started, the client doesn't know its status, retrying triggers a duplicate row and exacerbates the corruption. Fix the runtime path.
 - **"Add a heartbeat from the task that the watchdog kills if stale."** Building durable execution from `ctx.waitUntil` primitives is a bad direction. Workflows is the durable execution primitive.
-- **"Move to a queue first."** Queue consumers are also bound by 30s per message. Queues solve fan-out, not duration.
+- **"Move to a queue first."** Queues solve fan-out, not durability. A consumer invocation's 15-minute wall clock may well cover your task, but you get no per-step checkpointing, no per-step retry, and a failure restarts the work from zero — the original stuck-row problem just moves. Workflows is the durable-execution primitive.
