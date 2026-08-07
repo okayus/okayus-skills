@@ -18,14 +18,14 @@ browser binary *and* its apt library dependencies there. At **runtime** the fire
 and the CDN is blocked — but you don't need it: the browser is already on disk, and the
 e2e drives a **local** `wrangler dev` on `127.0.0.1`. The only sockets the run opens are
 browser → local Worker. With the OAuth round-trip replaced by the seeded-session seam (see
-`oauth-seeded-session-seam.md`), **external egress during e2e is zero** — nothing new in
-`init-firewall.sh`.
+`cloudflare-workers-e2e-playwright`'s `references/oauth-seeded-session-seam.md`),
+**external egress during e2e is zero** — nothing new in `init-firewall.sh`.
 
 This is the same pattern as the Rust/Haskell toolchains in `claude-code-docker-sandbox`:
 compiler at build time (no allowlist entry), dependencies at runtime (allowlist needed).
 A browser is a build-time dependency. Bake it.
 
-## The Dockerfile block
+## The Dockerfile block (canonical copy — don't fork it elsewhere)
 
 ```dockerfile
 # Playwright Chromium for in-container e2e. Fetched at BUILD time (network is open then),
@@ -115,7 +115,7 @@ pnpm e2e                               # runs; no CDN fetch, no firewall change
 If e2e reports `browser not found`, it's almost always the version drift in detail 4 —
 check `PLAYWRIGHT_VERSION` against `@playwright/test` and rebuild.
 
-## Trap 3: the `unsafe` ratelimit binding hangs every local request
+## Trap 1: the rate-limit binding hangs every local request
 
 **Symptom.** `wrangler dev` logs `Ready` and the TCP port accepts connections, but **every
 request hangs with no response**. The startup log contains a line like
@@ -128,7 +128,11 @@ Cloudflare resource. In a credential-free sandbox (or on a logged-out host) the
 auth/egress handshake for that remote resource never completes, and it blocks the request
 pipeline — so the Worker is "Ready" yet returns nothing.
 
-**Fix.** Strip the `unsafe` binding from the **built** config before serving it for e2e.
+Wrangler **4.36+** expresses the same limiter as a top-level `ratelimits` key instead.
+Whether the native v4 binding hangs local dev the same way is **not documented** — strip
+it too; rate limiting is out of e2e scope either way, so nothing of value is lost.
+
+**Fix.** Strip the rate-limit keys from the **built** config before serving it for e2e.
 The limiter is fail-open and rate limiting is out of e2e scope (test it separately — see
 the `cloudflare-workers-bot-scan-defense` skill), so removing it for the e2e Worker is
 correct and keeps the run credential-free:
@@ -136,15 +140,16 @@ correct and keeps the run credential-free:
 ```typescript
 // e2e/prepare-config.ts — post-build, pre-`wrangler dev`, editing dist/<bundle>/wrangler.json
 const cfg = JSON.parse(readFileSync(CONFIG, "utf8"));
-delete cfg.unsafe;                       // drop the ratelimit binding for e2e
+delete cfg.unsafe;      // wrangler 3.x ratelimit binding (observed to hang credential-free)
+delete cfg.ratelimits;  // wrangler 4.36+ top-level form (local behavior undocumented)
 writeFileSync(CONFIG, JSON.stringify(cfg, null, 2));
 ```
 
-**How to confirm it's this trap and not Trap 4.** Strip `unsafe`, re-serve. If requests now
+**How to confirm it's this trap and not Trap 2.** Strip the keys, re-serve. If requests now
 return, it was the binding. If they still hang at connect-but-no-byte, it's the bind
-address — Trap 4.
+address — Trap 2.
 
-## Trap 4: bind `--ip 127.0.0.1`, not `localhost`
+## Trap 2: bind `--ip 127.0.0.1`, not `localhost`
 
 **Symptom.** `wrangler dev` is "Ready", the TCP connection establishes, but the Worker
 **never returns a byte** — requests hang at connect. No CSP error, no SQLite error; the
@@ -161,8 +166,8 @@ Worker-logic one.
 Origin check):
 
 ```jsonc
-// e2e:server script
-"wrangler dev --config dist/<bundle>/wrangler.json --persist-to .wrangler/state-e2e --ip 127.0.0.1 --port 5399"
+// e2e:server script — NB: same --persist-to as your migrations (the main e2e skill's Trap 2)
+"wrangler dev --config dist/<bundle>/wrangler.json --persist-to .wrangler/state --ip 127.0.0.1 --port 5399"
 ```
 
 ```typescript
@@ -182,12 +187,12 @@ consistent (`prepare-config.ts`):
 cfg.dev = { ...(cfg.dev ?? {}), ip: "127.0.0.1" };
 ```
 
-If you ever see e2e requests hang at connect-but-no-response, this and Trap 3 are the two
+If you ever see e2e requests hang at connect-but-no-response, this and Trap 1 are the two
 suspects — check the bind address first (cheaper to rule out).
 
 ## See also
 
 - `claude-code-docker-sandbox` → *"The one rule that explains the whole design: build-time
-  vs runtime network"* — the general pattern this section instantiates.
-- `oauth-seeded-session-seam.md` (this skill) — why the run has no external egress to
-  allowlist in the first place.
+  vs runtime network"* — the general pattern this skill instantiates.
+- `cloudflare-workers-e2e-playwright` → `references/oauth-seeded-session-seam.md` — why
+  the run has no external egress to allowlist in the first place.
