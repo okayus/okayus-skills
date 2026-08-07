@@ -33,7 +33,7 @@ Cloudflare ships several hosted MCP servers (`https://*.mcp.cloudflare.com/mcp`)
 
 **Why docs-only:**
 - The account-touching servers **duplicate `wrangler`**, which the in-container agent already runs (allowlisted below). You lose little by leaving them out.
-- Their **OAuth is fragile inside a container.** Claude Code's *login* uses a paste-code flow (no callback) so it works in the sandbox — but **MCP** OAuth redirects to `http://localhost:<port>/callback`, and that "localhost" is the *host*, not the container. The callback port is often dynamic, and the listener may bind container-127.0.0.1, so publishing the port may not even help. Net: high-friction, low-payoff.
+- **OAuth from inside the container is no longer a blocker** — since Claude Code 2.1.191, MCP OAuth in headless environments prints the authorization URL and accepts the redirect URL pasted back (same paste-style flow as Claude Code login; `--no-browser` forces it). No localhost callback, no port publishing. It's still an extra per-rebuild approval dance, but the decisive reason to skip these servers is the `wrangler` overlap above, not OAuth friction. (Verified against the Claude Code changelog + MCP docs, 2026-08-07.)
 - `docs` needs no auth and is the highest-value server for *writing* Workers/wrangler config correctly.
 
 > If you later genuinely need an account MCP server, prefer **API-token (Bearer header)** auth over the browser flow — Cloudflare's remote servers accept a token (this is how the OpenAI Responses API uses them). Mint a least-privilege token per the [`cloudflare-api-token-permissions`](../cloudflare-api-token-permissions/SKILL.md) matrix and pass it via `headers` with `${ENV}` expansion in `.mcp.json`. Callback-free and sandbox-friendly.
