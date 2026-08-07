@@ -189,7 +189,9 @@ If it fails at `spyOn(globalThis, "fetch")` with "Cannot redefine property":
 
 ```bash
 node --version
-# Must be v22.x or higher. v20 has fetch behind a flag.
+# Must be v22.x or higher (this stack's engines requirement).
+# Note: global fetch itself is flag-free since Node 18 — the constraint is the
+# project baseline, not fetch availability.
 ```
 
 If you see "CommonJS/ESM mismatch" errors, check that `packages/web/package.json` has `"type": "module"`.

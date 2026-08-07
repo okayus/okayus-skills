@@ -91,7 +91,7 @@ When scheduling-to-Discord goes wrong, figure out what you're seeing before debu
 |---|---|---|---|
 | ✓ | ✓ | Nothing wrong | You're done |
 | ✓ | ✗ | Prod secret wrong, deploy not reflected, or Cron not firing in prod | B-1 → B-2 → B-3 below |
-| ✗ | ✓ | `.dev.vars` missing / wrong, OR `/__scheduled` not routed (skip path) | Verify `.dev.vars`; acknowledge `/__scheduled` 0.1.x caveat |
+| ✗ | ✓ | `.dev.vars` missing / wrong, OR no local scheduled endpoint (0.1.x baseline) | Verify `.dev.vars`; on current toolchains use `/cdn-cgi/handler/scheduled` (see below) |
 | ✗ | ✗ | Code-level issue, or webhook URL itself invalid | Check `pnpm test`, then webhook URL validity |
 | Dev msg → prod ch | — | `.dev.vars` has prod URL (you pasted prod URL into dev) | Re-paste correct URL to `.dev.vars`, consider rotating prod webhook (dev may have logged prod URL) |
 | Prod msg → dev ch | — | Prod secret has dev URL | `wrangler secret put DISCORD_WEBHOOK_URL` with correct prod URL, verify via manual trigger |
@@ -224,11 +224,21 @@ Record webhook rotation in the project's `docs/status.md` operational notes. Inc
 
 Rotation tracking helps spot patterns (e.g., if rotations happen more than yearly without a leak, something's off).
 
-## The `/__scheduled` dev caveat in detail
+## Local Cron testing in detail
 
-### What doesn't work
+### What works on current toolchains (verified 2026-08-07)
 
-`@cloudflare/vite-plugin@0.1.21` (the baseline that ships with `wrangler@3.x`) does not implement `/__scheduled?cron=<expr>` for local Cron testing. A curl:
+Both `wrangler dev` (default `:8787`) and `@cloudflare/vite-plugin@1.x` (default `:5173`) expose the official local test endpoint:
+
+```bash
+curl "http://localhost:5173/cdn-cgi/handler/scheduled?cron=15+*+*+*+*"
+```
+
+The `cron` query param should match an expression in `triggers.crons`. `wrangler dev` can additionally fire the handler interactively with the `s` hotkey. Source: <https://developers.cloudflare.com/workers/configuration/cron-triggers/>.
+
+### What doesn't work (`@cloudflare/vite-plugin@0.1.x` legacy)
+
+`@cloudflare/vite-plugin@0.1.21` (the baseline that shipped with `wrangler@3.x`) implements **no** local Cron endpoint — neither the old `/__scheduled` nor the current path. A curl:
 
 ```bash
 curl -i "http://localhost:5173/__scheduled?cron=0+*+*+*+*"
@@ -244,7 +254,7 @@ grep -A 1 '@cloudflare/vite-plugin' pnpm-lock.yaml | head -5
 
 ### Options
 
-**Option A — skip local, rely on tests + production verification** (practical default):
+**Option A — skip local, rely on tests + production verification** (for the 0.1.x baseline when you won't bump):
 
 - Run `pnpm test` (10 green) to prove the logic is correct
 - After deploying, watch `wrangler tail` for the next Cron fire
@@ -275,13 +285,13 @@ pnpm --filter @<scope>/web update wrangler --latest
 Which bumps to `^4.x`. Then update any wrangler command in docs / scripts:
 
 - `wrangler deployments view` → `wrangler versions view`
-- Other renames — see <https://developers.cloudflare.com/workers/wrangler/migration/v3-to-v4/>
+- Other renames — see <https://developers.cloudflare.com/workers/wrangler/migration/update-v3-to-v4/>
 
 **When is Option B worth it?** When you're iterating heavily on Cron schedule changes or testing Cron-triggered D1 queries locally, Option A's "deploy and see" loop becomes slow. Otherwise Option A is cheaper.
 
 **Option C — `wrangler dev` in parallel with `vite dev`** (legacy):
 
-You can run `wrangler dev` separately (typically port 8787) while `vite dev` is on 5173. `wrangler dev` hits the actual Worker and does implement `/__scheduled`. But routing requests between the two ports is painful, and not worth setting up for most cases. Mentioned for completeness.
+You can run `wrangler dev` separately (typically port 8787) while `vite dev` is on 5173. `wrangler dev` hits the actual Worker and does implement the local scheduled endpoint (`/cdn-cgi/handler/scheduled` on wrangler 4; `/__scheduled` in the wrangler 3 era). But routing requests between the two ports is painful, and not worth setting up for most cases. Mentioned for completeness.
 
 ## Secret value check: is my prod secret correct?
 

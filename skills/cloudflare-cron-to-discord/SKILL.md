@@ -1,6 +1,6 @@
 ---
 name: cloudflare-cron-to-discord
-description: Wire a Cloudflare Workers Cron Trigger to post to a Discord Webhook using the pure-function-then-boundary architecture. Use when adding scheduled notifications (daily summaries, reminders, health pings) to a Workers app. Covers the domain/boundary split (pure message builder + throw-less boundary sender), environment-timezone-independent UTC→JST conversion, vitest mock testing of the boundary, dev/prod webhook naming discipline that makes cross-contamination detectable, the secret management workflow, and the well-known `/__scheduled` dev caveat with `@cloudflare/vite-plugin@0.1.x`. Assumes you already have a working Cloudflare Workers skeleton (see cloudflare-workers-deploy-skeleton).
+description: Wire a Cloudflare Workers Cron Trigger to post to a Discord Webhook using the pure-function-then-boundary architecture. Use when adding scheduled notifications (daily summaries, reminders, health pings) to a Workers app. Covers the domain/boundary split (pure message builder + throw-less boundary sender), environment-timezone-independent UTC→JST conversion, vitest mock testing of the boundary, dev/prod webhook naming discipline that makes cross-contamination detectable, the secret management workflow, and local Cron testing via `/cdn-cgi/handler/scheduled` (plus the legacy `@cloudflare/vite-plugin@0.1.x` caveat, which has no local Cron endpoint at all). Assumes you already have a working Cloudflare Workers skeleton (see cloudflare-workers-deploy-skeleton).
 license: MIT
 compatibility: Designed for Claude Code and similar agents. Targets Cloudflare Workers with Hono + vitest (Node env). Requires an existing Workers skeleton with a `scheduled` handler and `types.ts` Bindings. Requires Discord server admin or "Manage Webhooks" permission to create webhooks.
 metadata:
@@ -92,17 +92,17 @@ High-level; detailed commands in [references/operations.md](references/operation
 6. **Agent**: Commit → push → user merges → auto-deploy
 7. **Validate prod**: `wrangler tail` shows `[cron] fired at ...` at scheduled time, Discord prod channel receives `[<project>] cron fired at <JST> (skeleton)` message
 
-## The `/__scheduled` dev caveat
+## Local Cron testing (`/cdn-cgi/handler/scheduled`)
 
-`@cloudflare/vite-plugin@0.1.x` does **not** implement `/__scheduled?cron=<expr>` for local Cron testing — requests fall back to the SPA HTML. `1.x` fixes it but requires `wrangler@^4`.
+Current toolchains expose a local test endpoint for the scheduled handler — both `wrangler dev` (default `:8787`) and `@cloudflare/vite-plugin@1.x` (default `:5173`):
 
-**Your options for local Cron verification**:
+```bash
+curl "http://localhost:5173/cdn-cgi/handler/scheduled?cron=15+*+*+*+*"
+```
 
-1. **Skip local Cron testing** — rely on vitest mocks + production verification. This is the practical default unless you're iterating heavily on Cron schedule changes
-2. **Bump** `@cloudflare/vite-plugin@^1.x` + `wrangler@^4` simultaneously — major version jump, treat as its own task
-3. **Use Cloudflare Dashboard → Triggers → "Send event" / "Run now"** button for on-demand prod testing (doesn't help local, but enables fast prod verification)
+The `cron` query param should match an expression in `triggers.crons`. In `wrangler dev` you can also press the `s` hotkey to fire the handler interactively. (Source: [Workers Cron Triggers docs](https://developers.cloudflare.com/workers/configuration/cron-triggers/), verified 2026-08-07.)
 
-Full tradeoffs in [references/operations.md](references/operations.md).
+**Legacy caveat (`@cloudflare/vite-plugin@0.1.x` / wrangler 3 baseline)**: 0.1.x implements **no** local Cron endpoint at all — the old `/__scheduled` path falls through to the SPA HTML. On that baseline, either bump to `vite-plugin@^1` + `wrangler@^4` simultaneously (major version jump, treat as its own task) or skip local Cron testing and rely on vitest mocks + prod verification (`wrangler tail` at the next scheduled fire). Full tradeoffs in [references/operations.md](references/operations.md).
 
 ## Diagnosing "prod Discord isn't receiving"
 
@@ -111,7 +111,7 @@ When the cron fires but messages don't land, work the symptom matrix in [referen
 | Local dev ch | Prod ch | Likely cause |
 |---|---|---|
 | ✓ arrives | ✗ nothing | Prod secret wrong, or deploy not reflected yet, or Cron not firing |
-| ✗ nothing | ✓ arrives | `.dev.vars` missing, or `/__scheduled` not routed (skip path) |
+| ✗ nothing | ✓ arrives | `.dev.vars` missing, or no local scheduled endpoint on your baseline (see *Local Cron testing*) |
 | ✗ nothing | ✗ nothing | Code-level issue (`cron.ts` / `discord.ts` implementation) OR webhook URL itself invalid |
 | Dev msg in prod ch | — | `.dev.vars` has prod URL (swap fix + rotate) |
 | Prod msg in dev ch | — | Prod secret has dev URL (swap fix + rotate) |
