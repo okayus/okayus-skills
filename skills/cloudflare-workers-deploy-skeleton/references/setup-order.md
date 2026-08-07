@@ -71,6 +71,8 @@ Create root `package.json`:
 }
 ```
 
+> Version snapshots (`pnpm@9.15.0`, `node >=22`, and `compatibility_date` in wrangler.jsonc) age — replace them with the current pnpm / Node LTS / today's date at generation time instead of copying verbatim.
+
 **Why explicit `run`** for `deploy`: `pnpm deploy` is a built-in pnpm subcommand and collides with npm-script `deploy`. Always use `run deploy` in the root's filtered version.
 
 ### 2.2. `packages/web/` layout

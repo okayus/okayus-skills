@@ -22,20 +22,20 @@
     "react-dom": "^19.0.0"
   },
   "devDependencies": {
-    "@cloudflare/vite-plugin": "^0.1.0",
-    "@cloudflare/workers-types": "^4.20250328.0",
+    "@cloudflare/vite-plugin": "^1.51.0",
     "@types/react": "^19.0.0",
     "@types/react-dom": "^19.0.0",
     "@vitejs/plugin-react": "^4.3.0",
     "typescript": "^5.7.0",
-    "vite": "^6.0.0",
-    "wrangler": "^3.100.0"
+    "vite": "^6.1.0",
+    "wrangler": "^4.120.0"
   }
 }
 ```
 
 Version pinning notes:
-- `@cloudflare/vite-plugin` 0.1.x is the baseline that matches `wrangler@^3.x`. See the sibling `cloudflare-cron-to-discord` skill for the tradeoffs of bumping to 1.x (requires `wrangler@^4`, fixes `/__scheduled` dev behavior)
+- Baseline is current **wrangler v4 + vite-plugin 1.x** (the versions above were current at 2026-08 — take the latest at generation time). Projects still on `wrangler@3.x` / `vite-plugin@0.1.x` keep working but have no local Cron-testing endpoint and get no new features — plan the bump via the official [update-v3-to-v4 guide](https://developers.cloudflare.com/workers/wrangler/migration/update-v3-to-v4/)
+- Worker types come from **`wrangler types`** (generates `worker-configuration.d.ts`; re-run after any binding change) — the current official recommendation. The older `@cloudflare/workers-types` package still works but is no longer the default path
 - **Don't add `drizzle-kit` / `drizzle-orm` yet.** The empty `0000_init.sql` validates the migration pipeline without an ORM dependency. Defer ORM until you have a schema to generate
 
 ## `packages/web/wrangler.jsonc`

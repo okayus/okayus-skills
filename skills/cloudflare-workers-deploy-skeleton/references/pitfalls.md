@@ -83,17 +83,24 @@ If `database_id` is already wrong in prod, fix locally and re-deploy. Data in th
 
 **Recovery if changed**: There's no recovery other than asking every user to re-register. Document the RP_ID lock-in date in an ADR (`docs/adr/0001-rp-id-lock-in.md`) to avoid future confusion.
 
-## 5. `@cloudflare/vite-plugin@0.1.x` doesn't route `/__scheduled` in dev
+## 5. Local Cron testing — `/cdn-cgi/handler/scheduled` (0.1.x has no endpoint at all)
 
-**Symptom**: `curl "http://localhost:5173/__scheduled?cron=<expr>"` returns 200 but the body is SPA HTML (`<h1>...</h1>`) instead of running the `scheduled` handler. No `[cron] fired at ...` log appears.
+**Current toolchains** (wrangler 4 / vite-plugin 1.x — verified 2026-08-08) have local Cron testing built in:
 
-**Cause**: The plugin's 0.1.x dev server doesn't implement the `/__scheduled` endpoint for local Cron testing. Requests to `/__scheduled` fall through to the SPA fallback.
+```bash
+curl "http://localhost:5173/cdn-cgi/handler/scheduled?cron=<expr>"   # vite-plugin :5173 / wrangler dev :8787
+```
 
-**Workaround options**:
+`wrangler dev` can also fire the handler interactively with the `s` hotkey. (The old `/__scheduled` path is gone from current docs.)
+
+**Symptom on the legacy 0.1.x baseline**: any local cron-test curl returns 200 but the body is SPA HTML (`<h1>...</h1>`) instead of running the `scheduled` handler; no `[cron] fired at ...` log appears. The 0.1.x dev server implements **no** local Cron endpoint.
+
+**Workaround options on 0.1.x**:
 
 a. **Skip local Cron testing** entirely. Verify via `wrangler tail` after prod deploy. This is fine for skeleton-phase verification — the domain logic is tested via vitest unit tests, and the Cron wiring is identical between dev and prod
-b. **Bump to `@cloudflare/vite-plugin@1.x`**, which implements `/__scheduled`. This requires `wrangler@^4` (major breaking change), so do it deliberately
-c. **Trigger from Dashboard** → Workers & Pages → your-worker → Triggers → "Send event" / "Run now" on the Cron row (UI label varies by release)
+b. **Bump to `@cloudflare/vite-plugin@1.x`** + `wrangler@^4` (major breaking change), deliberately
+
+(There is **no** Dashboard button that fires a Cron manually — that feature request was closed NOT_PLANNED: workers-sdk#3377.)
 
 See the sibling `cloudflare-cron-to-discord` skill for detailed coverage of this issue.
 

@@ -42,7 +42,7 @@ Run through the steps in [references/setup-order.md](references/setup-order.md).
 |---|---|---|---|
 | L1 | `wrangler.jsonc` | `assets.not_found_handling: "single-page-application"` | Fallback assets to `index.html` |
 | L2 | `wrangler.jsonc` | `assets.run_worker_first: true` | Worker sees every request before Assets (lets secureHeaders wrap SPA HTML later) |
-| L3 | `worker/index.ts` | `app.notFound(async (c) => new Response((await c.env.ASSETS.fetch(c.req.raw)).body, res))` | Worker explicitly delegates unmatched routes to the Assets binding |
+| L3 | `worker/index.ts` | `app.notFound(...)` → delegate to `c.env.ASSETS.fetch` (full code in [worker-template.md](references/worker-template.md)) | Worker explicitly delegates unmatched routes to the Assets binding |
 
 If any layer is missing and `/` returns 404, consult [references/spa-routing-diagnosis.md](references/spa-routing-diagnosis.md).
 
@@ -78,7 +78,7 @@ Brief summary; full write-ups in [references/pitfalls.md](references/pitfalls.md
 - **"Edit Cloudflare Workers" API token template lacks `D1:Edit`** → `wrangler d1 migrations apply --remote` fails with error 7403 in CI. Add the D1 permission manually when creating the token
 - **`database_id` placeholder** left as `<...>` in `wrangler.jsonc` → deploy fails. Substitute immediately after `wrangler d1 create`, don't defer
 - **`RP_ID` locking rule**: If you'll ever use WebAuthn / passkeys, the RP_ID (hostname) **must be locked on first deploy**. Changing it later invalidates every registered credential. Pin to the production `workers.dev` subdomain or your custom domain from day 1, treat as permanent
-- **vite-plugin `/__scheduled` dev caveat**: `@cloudflare/vite-plugin@0.1.x` doesn't route `/__scheduled` in dev (falls back to SPA). `1.x` fixes it but requires `wrangler@^4`. For dev Cron testing, see the `cloudflare-cron-to-discord` skill's fallback
+- **Local Cron testing**: current toolchains expose `/cdn-cgi/handler/scheduled?cron=<expr>` on both `wrangler dev` and vite-plugin `1.x` (plus the `s` hotkey in `wrangler dev`). The legacy `0.1.x` baseline has **no** local Cron endpoint at all (requests fall back to SPA HTML) — see pitfall #5 and the `cloudflare-cron-to-discord` skill
 
 ## Scope boundary — what this skill does NOT cover
 
@@ -86,6 +86,8 @@ Brief summary; full write-ups in [references/pitfalls.md](references/pitfalls.md
 - Security hardening (`secureHeaders`, CSP, `app.onError`, `sessionMiddleware`) — build on top of this skeleton in a later phase
 - Domain schema (tasks, users, etc.) — defer to when you know what the domain actually looks like
 - `drizzle-orm` / `drizzle-kit` — don't install until you have a real schema to generate migrations for. The empty `0000_init.sql` validates the pipeline without forcing a Chekhov's-gun dependency. When you *do* adopt drizzle for real schema work, read the `cloudflare-d1-drizzle-migration` skill first — D1 has a silent incompatibility with drizzle-kit's generated PRAGMAs that can cascade-delete child data on table-rebuild migrations
+
+- Token-less deploys — Workers Builds (Cloudflare's git-connected CI/CD, zero Cloudflare credentials in GitHub) is the alternative to the GH-Actions-with-API-token flow used here; see `cloudflare-workers-builds-keyless-deploy`
 
 **Build logic on top after deploy is provably working**, not before.
 
