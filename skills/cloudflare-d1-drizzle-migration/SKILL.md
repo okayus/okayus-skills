@@ -97,7 +97,7 @@ Beyond the mechanical runbook, three generalizable lessons. Keep these in your h
 ## Scope boundary — what this skill does NOT cover
 
 - Initial D1 + drizzle setup — use `cloudflare-workers-deploy-skeleton` first
-- Backup strategy beyond pre-migration dumps (weekly snapshots, PITR) — different concern
+- Backup strategy beyond pre-migration dumps — weekly snapshots / long-term retention are the [`cloudflare-d1-weekly-backup-via-pr`](../cloudflare-d1-weekly-backup-via-pr/SKILL.md) skill's concern. D1's built-in PITR (Time Travel) appears here only as the whole-DB restore path in runbook step 7
 - Schema design (when to use CASCADE vs RESTRICT vs NO ACTION) — covered briefly in lessons.md but not the main focus
 - Migrating between D1 instances or Postgres → D1 conversions — out of scope
 
