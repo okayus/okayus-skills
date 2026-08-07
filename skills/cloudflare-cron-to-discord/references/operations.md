@@ -214,9 +214,9 @@ pnpm --filter @<scope>/web run deploy
 
 This rebuilds and re-uploads the Worker, forcing a fresh isolate that reads the new secret.
 
-### 5. Document in status.md
+### 5. Document the rotation
 
-Record webhook rotation in the project's `docs/status.md` operational notes. Include:
+Record webhook rotation in your project's operational notes (wherever those live — an ops log, `docs/status.md`, a runbook). Include:
 
 - Date of rotation
 - Reason (leak / scheduled / compromise)
@@ -260,7 +260,7 @@ grep -A 1 '@cloudflare/vite-plugin' pnpm-lock.yaml | head -5
 - After deploying, watch `wrangler tail` for the next Cron fire
 - Trigger via Dashboard → Triggers → "Send event" for immediate verification without waiting
 
-This is what the reference `routine-tasks` project uses.
+This is the practical default for small projects.
 
 **Option B — bump `@cloudflare/vite-plugin` to 1.x**:
 

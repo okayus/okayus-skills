@@ -51,7 +51,7 @@ This is the "personal hobby project" sweet spot.
 |---|---|---|
 | Cloudflare R2 | Same cloud as your D1, no egress fees within Cloudflare | Need to set up bucket + lifecycle policy + access key |
 | AWS S3 + Glacier | Cheap long-term storage, lifecycle automation | Different cloud (egress costs to Cloudflare); IAM complexity |
-| GitHub Actions artifacts | Free, easy to wire from existing workflow | 90-day retention max, not designed as primary backup store |
+| GitHub Actions artifacts | Free, easy to wire from existing workflow | Default 90-day retention (private repos can raise it to 400 days), not designed as a primary backup store |
 | Self-hosted / NAS | Full control | You're now operating storage infrastructure |
 
 For a project graduating from commit-to-git, **R2** is the natural next step (same cloud, simple S3-compatible API, no egress fees from Workers / Actions in the same network).

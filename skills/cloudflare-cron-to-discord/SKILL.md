@@ -2,7 +2,7 @@
 name: cloudflare-cron-to-discord
 description: Wire a Cloudflare Workers Cron Trigger to post to a Discord Webhook using the pure-function-then-boundary architecture. Use when adding scheduled notifications (daily summaries, reminders, health pings) to a Workers app. Covers the domain/boundary split (pure message builder + throw-less boundary sender), environment-timezone-independent UTC→JST conversion, vitest mock testing of the boundary, dev/prod webhook naming discipline that makes cross-contamination detectable, the secret management workflow, and local Cron testing via `/cdn-cgi/handler/scheduled` (plus the legacy `@cloudflare/vite-plugin@0.1.x` caveat, which has no local Cron endpoint at all). Assumes you already have a working Cloudflare Workers skeleton (see cloudflare-workers-deploy-skeleton).
 license: MIT
-compatibility: Designed for Claude Code and similar agents. Targets Cloudflare Workers with Hono + vitest (Node env). Requires an existing Workers skeleton with a `scheduled` handler and `types.ts` Bindings. Requires Discord server admin or "Manage Webhooks" permission to create webhooks.
+compatibility: Designed for Claude Code and similar agents. Targets Cloudflare Workers with vitest (Node env); framework-agnostic — a Hono skeleton is the typical host but nothing here depends on it. Requires an existing Workers skeleton with a `scheduled` handler and `types.ts` Bindings. Requires Discord server admin or "Manage Webhooks" permission to create webhooks.
 metadata:
   author: okayus
   version: "0.1.0"

@@ -30,7 +30,7 @@ Do **not** apply the rate-limit binding portion for:
 - A Worker that returns hard 401/403 with no DB hit on every unauthenticated route (you're already fine — bots can't drain you)
 - A Worker fronted by Cloudflare Access / IP allowlist where every route is already gated above the Worker layer (Access returns 302/403 before the Worker is invoked, so there's nothing left to rate-limit). **Caveat**: a custom domain protected by Access does *not* automatically protect the `<worker-name>.<account>.workers.dev` URL — that endpoint stays open by default and bypasses your Access policy. Set `workers_dev: false` in `wrangler.jsonc` to close it (recommended), or attach a separate Access application targeting the `*.workers.dev` hostname (Dashboard → Zero Trust → Access → Applications → Add → Self-hosted, with the workers.dev hostname). Verify with `curl -I https://<worker-name>.<account>.workers.dev/` after deploy — expect a 302 redirect or 403.
 - DDoS-grade attacks (you need WAF / Cloudflare Pro+ rules, not just a Worker binding)
-- Application-level brute force (e.g., trying credentials against a known username) — that's `auth-brute-force` territory and needs per-account lockout, not just per-IP rate limit
+- Application-level brute force (e.g., trying credentials against a known username) — that needs per-account lockout, a different design layer (no dedicated skill in this repo yet), not just per-IP rate limit
 
 ## The mental model — what bots actually drain
 
@@ -217,7 +217,7 @@ If 1 + 2 + 3 all pass, you're correctly configured **even if the next step (synt
 
 ### Verifying without Cloudflare credentials (sandboxed agents / keyless CI)
 
-Checks 1 and 2 above need an authenticated Cloudflare session (`wrangler versions view`, the Dashboard). If your deploy pipeline is *keyless* — e.g. Cloudflare Workers Builds plus a sandboxed agent that deliberately holds **no** Cloudflare credential — you cannot run them, and that's by design, not a gap to paper over: reading deployed account state is exactly the operation the credential boundary exists to gate. The blocker is the absent credential, **not** egress (a locked-down sandbox can still reach `api.cloudflare.com` and your prod host if they're allowlisted). Verify these ways instead, no credential required:
+Checks 1 and 2 above need an authenticated Cloudflare session (`wrangler versions view`, the Dashboard). If your deploy pipeline is *keyless* — e.g. Cloudflare Workers Builds plus a sandboxed agent that deliberately holds **no** Cloudflare credential (the [`cloudflare-workers-builds-keyless-deploy`](../cloudflare-workers-builds-keyless-deploy/SKILL.md) + [`sandboxed-agent-git-relay`](../sandboxed-agent-git-relay/SKILL.md) setup) — you cannot run them, and that's by design, not a gap to paper over: reading deployed account state is exactly the operation the credential boundary exists to gate. The blocker is the absent credential, **not** egress (a locked-down sandbox can still reach `api.cloudflare.com` and your prod host if they're allowlisted). Verify these ways instead, no credential required:
 
 - **Source + pipeline truth.** The deployed config *is* `wrangler.jsonc` in the merged branch, built by your git-connected CI. Read the `observability` / `ratelimits` (or `unsafe.bindings`) block and the consuming middleware, then confirm the build is green over unauthenticated GitHub REST: `curl -s https://api.github.com/repos/<owner>/<repo>/commits/<branch>/check-runs` and look for your build check `conclusion: success`. Config-in-VCS + green keyless build ⇒ deployed.
 - **Behavioral black-box for the rate limiter.** Burst the protected route from one IP and watch for `429`: `for i in $(seq 1 40); do curl -s -o /dev/null -w '%{http_code}\n' https://<host>/<protected-route>; done | sort | uniq -c`. **A 429 is positive proof the binding is live and enforcing** — decisive with the fail-open middleware (no binding ⇒ it can never 429). The converse does *not* hold: **no 429 is inconclusive**, because Workers Rate Limiting is eventually consistent and per-colo (see "The synthetic burst test caveat"). So treat 429-seen as a green check and absence as "unknown, fall back to source+pipeline".
@@ -246,7 +246,7 @@ Full caveat list and decision matrix (binding vs. WAF rule) in [references/cavea
 ## What this skill does NOT cover
 
 - **DDoS protection** — that's Cloudflare WAF / Pro+ / managed rules, not Worker binding. If you're under sustained attack, escalate to WAF.
-- **Per-account brute force lockout** — login throttling by username/account, not by IP. Different design (you need a `failed_login_attempts` table + cooldown), and `auth-brute-force` skills cover that.
+- **Per-account brute force lockout** — login throttling by username/account, not by IP. Different design (you need a `failed_login_attempts` table + cooldown); no dedicated skill in this repo yet.
 - **Captcha / Turnstile integration** — orthogonal layer above rate limiting, useful for signup endpoints and webhooks but not covered here.
 - **Custom WAF Rate Limiting Rules** — Dashboard configuration, not `wrangler.jsonc`. Cross-references this skill but is its own setup flow.
 - **Bot Fight Mode / Super Bot Fight Mode** — Cloudflare's managed bot detection, configurable in Dashboard. Useful in tandem with this skill but not part of the deliverable.

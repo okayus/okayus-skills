@@ -43,7 +43,7 @@ Triggers that are safe (additive):
 - `ADD COLUMN` with no constraints or with a default — uses `ALTER TABLE ADD`, not a rebuild
 - `CREATE INDEX` — no table touch
 - New tables entirely
-- Adding a new NULLABLE `.references()` column at the same time as the column (wait — does this rebuild? verify on a spike)
+- Adding a new NULLABLE `.references()` column in the same migration — **classification unverified**: drizzle-kit may emit a rebuild for the FK. Run a spike and read the generated SQL before treating this as additive
 
 Always read the generated SQL before trusting a classification.
 

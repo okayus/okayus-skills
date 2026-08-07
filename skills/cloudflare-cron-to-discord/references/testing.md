@@ -70,9 +70,9 @@ describe("toJstParts", () => {
     });
   });
 
-  test("Cron '0 * * * *' fires with minute 0 (sanity)", () => {
-    const utc = new Date("2026-04-22T07:00:00Z");
-    expect(toJstParts(utc).minutes).toBe(0);
+  test("Cron '15 * * * *' fires with minute 15 (sanity)", () => {
+    const utc = new Date("2026-04-22T07:15:00Z");
+    expect(toJstParts(utc).minutes).toBe(15);
   });
 });
 
@@ -204,4 +204,4 @@ No. The skeleton does not integration-test Cron → real Discord. Reasons:
 - Flaky (Discord rate-limits, network blips)
 - The vitest mocks cover the contract; production verification is done manually via `wrangler tail` post-deploy
 
-When you graduate out of skeleton, consider Playwright e2e for the UI and keep Cron out of e2e. See CLAUDE.md's testing philosophy in the `routine-tasks` project for reference.
+When you graduate out of skeleton, consider Playwright e2e for the UI and keep Cron out of e2e — see the `cloudflare-workers-e2e-playwright` skill's test-scope philosophy.
