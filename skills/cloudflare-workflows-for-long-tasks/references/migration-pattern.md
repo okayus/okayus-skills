@@ -53,68 +53,23 @@ The `'waitUntil timeout (30s); migrating to ...'` message is intentionally speci
 
 ## Step 2 — Add the Workflow class
 
-Create `worker/lib/<job>-workflow.ts`. The class **extends** `WorkflowEntrypoint<Bindings, Params>`. Three steps + a top-level `try/catch` that runs a `mark-failed` step before re-throwing:
+Create `worker/lib/<job>-workflow.ts`. The class **extends** `WorkflowEntrypoint<Bindings, Params>`. Three steps + a top-level `try/catch` that runs a `mark-failed` step before re-throwing.
+
+**The full class lives in [implementation.md](implementation.md)** — that copy is canonical; don't fork it here (two copies drift). The shape you're building:
 
 ```ts
-import { WorkflowEntrypoint, type WorkflowEvent, type WorkflowStep } from "cloudflare:workers";
-import { drizzle } from "drizzle-orm/d1";
-import { eq } from "drizzle-orm";
-import { jobsTable } from "../db/schema";
-import type { Bindings } from "../types";
-
-export type JobParams = { jobId: string; inputKey: string };
-
 export class JobWorkflow extends WorkflowEntrypoint<Bindings, JobParams> {
   async run(event: WorkflowEvent<JobParams>, step: WorkflowStep) {
-    const { jobId, inputKey } = event.payload;
-    const db = drizzle(this.env.DB);
-
-    await step.do("mark-running", async () => {
-      const startedAt = new Date().toISOString();
-      await db.update(jobsTable)
-        .set({ status: "running", startedAt, updatedAt: startedAt, errorMessage: null })
-        .where(eq(jobsTable.id, jobId));
-    });
-
+    await step.do("mark-running", async () => { /* row → status='running' */ });
     try {
       const result = await step.do(
         "do-work",
-        {
-          retries: { limit: 2, delay: "10 seconds", backoff: "exponential" },
-          timeout: "5 minutes",
-        },
-        async () => {
-          // I/O + heavy work in ONE step. Don't split fetch and process —
-          // the bytes can't ride between steps (not JSON-serializable).
-          const obj = await this.env.BUCKET.get(inputKey);
-          if (!obj) throw new Error(`missing in R2: ${inputKey}`);
-          const buf = await obj.arrayBuffer();
-          const r = await runHeavyTask(this.env, buf);
-          if (r.isErr()) throw new Error(formatError(r.error));
-          return r.value; // small JSON, persisted by the runtime
-        },
+        { retries: { limit: 2, delay: "10 seconds", backoff: "exponential" }, timeout: "5 minutes" },
+        async () => { /* fetch input + heavy work in ONE step — bytes can't ride between steps */ },
       );
-
-      await step.do("persist-result", async () => {
-        const finishedAt = new Date().toISOString();
-        // delete-then-insert if you want full overwrite; or upsert.
-        // Either way: must be idempotent (step may re-run on replay).
-        await db.update(jobsTable)
-          .set({ status: "succeeded", result: JSON.stringify(result), finishedAt, updatedAt: finishedAt, errorMessage: null })
-          .where(eq(jobsTable.id, jobId));
-      });
+      await step.do("persist-result", async () => { /* status='succeeded' + result (idempotent) */ });
     } catch (e) {
-      await step.do("mark-failed", async () => {
-        const finishedAt = new Date().toISOString();
-        await db.update(jobsTable)
-          .set({
-            status: "failed",
-            errorMessage: e instanceof Error ? e.message : String(e),
-            finishedAt,
-            updatedAt: finishedAt,
-          })
-          .where(eq(jobsTable.id, jobId));
-      });
+      await step.do("mark-failed", async () => { /* status='failed' + errorMessage */ });
       throw e; // workflow itself is also marked failed in the Dashboard
     }
   }
@@ -213,9 +168,9 @@ await c.env.JOB_WORKFLOW.create({
 ## Step 8 — Local verify, then deploy
 
 ```sh
-pnpm vp check                 # format + lint
+pnpm run check                # your repo's format + lint script
 pnpm exec tsc -p tsconfig.worker.json   # typecheck — the Workflow generic flows through here
-pnpm vp build
+pnpm run build
 # unit tests (vitest) for any pure code reused unchanged
 pnpm test
 ```
@@ -230,7 +185,7 @@ Trigger the path that calls `env.JOB_WORKFLOW.create(...)`. Then in three places
 
 1. **D1**: `SELECT status, started_at, finished_at, error_message FROM <table> ORDER BY created_at DESC LIMIT 5` — watch `pending` → `running` → `succeeded` (or `failed` with a meaningful message)
 2. **`wrangler tail`**: the Worker fetch handler logs are here. Note: **per-step Workflow logs do NOT appear in `wrangler tail`** — they're separate. The fetch handler logs you'll see are the `POST /...` line and any `console.log` you added. Step-level diagnostics live in:
-3. **Cloudflare Dashboard → Workers & Pages → your worker → Workflows tab**: each instance shows the step-by-step state, retries, and the persisted output of each step. This is where you debug "the workflow exists but a specific step is failing"
+3. **Cloudflare Dashboard → Workflows page** (account-level — `dash.cloudflare.com/:account/workers/workflows`) → your workflow → instance: shows the step-by-step state, retries, and each step's persisted output. Same data from the CLI: `wrangler workflows instances describe <NAME> <ID>`. This is where you debug "the workflow exists but a specific step is failing"
 
 If the row sits at `status='running'` for longer than `(timeout × (retries.limit + 1))`, something is wrong — probably the `do-work` step itself isn't completing. The Dashboard is your single best diagnostic tool here.
 

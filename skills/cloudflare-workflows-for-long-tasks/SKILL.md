@@ -1,8 +1,8 @@
 ---
 name: cloudflare-workflows-for-long-tasks
-description: Migrate a Cloudflare Worker post-response task off `ctx.waitUntil()` onto a `WorkflowEntrypoint` when the task can exceed the 30-second `waitUntil` wall-clock cap (Vision LLM inference, third-party API with slow tails, multi-step orchestration). Use when you see "waitUntil() tasks did not complete within the allowed time after invocation end and have been cancelled" in `wrangler tail`, or when DB rows get stuck in an in-progress state because the runtime killed the task before the catch block ran. Covers the exact `wrangler.jsonc` workflows binding, the `WorkflowEntrypoint` class export pattern alongside the default `fetch` handler, the `step.do()` retry / persist / serializable-output rules, the production cleanup runbook for rows orphaned in `running`/`pending` status, and the gotchas (the `Workflow<Params>` type is a `@cloudflare/workers-types` global, not a `cloudflare:workers` import; bytes can't ride the wire between steps).
+description: Migrate a Cloudflare Worker post-response task off `ctx.waitUntil()` onto a `WorkflowEntrypoint` when the task can exceed the 30-second `waitUntil` wall-clock cap (Vision LLM inference, third-party API with slow tails, multi-step orchestration). Use when you see "waitUntil() tasks did not complete within the allowed time after invocation end and have been cancelled" in `wrangler tail`, or when DB rows get stuck in an in-progress state because the runtime killed the task before the catch block ran. Covers the exact `wrangler.jsonc` workflows binding, the `WorkflowEntrypoint` class export pattern alongside the default `fetch` handler, the `step.do()` retry / persist / serializable-output rules, the production cleanup runbook for rows orphaned in `running`/`pending` status, and the gotchas (the `Workflow<Params>` type is a global — via `wrangler types` or workers-types — not a `cloudflare:workers` import; bytes can't ride the wire between steps).
 license: MIT
-compatibility: Designed for Claude Code and similar agents. Targets Cloudflare Workers (Free or Paid) with `@cloudflare/workers-types@4.20240000+`, `wrangler@^4`, Hono / D1 / R2 stacks. Assumes you already have a deployed Worker that uses `ctx.waitUntil()` for a post-response task and have hit (or are about to hit) the 30s wall-clock limit. Workflows are available on Workers Free and Paid — no separate contract.
+compatibility: Designed for Claude Code and similar agents. Targets Cloudflare Workers (Free or Paid) with `wrangler@^4` (worker types via `wrangler types`, or the older `@cloudflare/workers-types@4.20240000+`), Hono / D1 / R2 stacks. Assumes you already have a deployed Worker that uses `ctx.waitUntil()` for a post-response task and have hit (or are about to hit) the 30s wall-clock limit. Workflows are available on Workers Free and Paid — no separate contract.
 metadata:
   author: okayus
   version: "0.1.0"
@@ -99,15 +99,16 @@ The third pitfall — bytes between steps — has tripped projects that intuit "
 
 More worked examples in [references/pitfalls.md](references/pitfalls.md).
 
-## The `Workflow<Params>` type lives in workers-types globals
+## The `Workflow<Params>` type is a global, not an import
 
 ```ts
 // ❌ This fails: Module '"cloudflare:workers"' has no exported member 'Workflow'.
 import type { Workflow } from "cloudflare:workers";
 
-// ✅ Correct: Workflow is a global declared by @cloudflare/workers-types,
-//    exactly like Ai / D1Database / R2Bucket / Fetcher.
-//    No import needed in a tsconfig that has "types": ["@cloudflare/workers-types"].
+// ✅ Correct: Workflow is a global type — generated into worker-configuration.d.ts
+//    by `wrangler types` (or declared by the older @cloudflare/workers-types package),
+//    exactly like Ai / D1Database / R2Bucket / Fetcher. No import needed once the
+//    tsconfig picks up the generated file (or the package).
 type Bindings = {
   MY_WORKFLOW: Workflow<MyParams>;
 };
@@ -159,7 +160,7 @@ This skill does **NOT** cover:
 - **Workers AI input shapes / model selection** — Workflows give you durable execution and visibility into errors, but the analyzer logic itself is orthogonal. If you migrate to Workflows and the inner work still fails, fix it in the analyzer, not in the workflow plumbing
 - **Cloudflare Queues** — different abstraction (batch consumer; 15 min wall clock per invocation, CPU 30s default / 5 min max). Use Queues when you have many small jobs that fan out, Workflows when you have one durable job per request
 - **Workflow signal events / external triggers** — `step.waitForEvent` exists, but skeleton migration doesn't need it; cover it when you actually need approval / webhook gates
-- **`vp dev` / local Workflow emulation** — limited; this skill assumes verification happens against a deployed Worker. Local dev can still trigger `env.MY_WORKFLOW.create()` calls but the inner steps may behave differently
+- **Local Workflow emulation** — `wrangler dev` emulates Workflows locally (v3.89+); what is *not* supported is `--remote` / remote bindings. This skill still assumes final verification against a deployed Worker — local dev can trigger `env.MY_WORKFLOW.create()` and run steps in the emulator, but production observability (Dashboard instances) only exists deployed
 - **Hono `c.executionCtx` vs Workers raw `ctx`** — the migration replaces `c.executionCtx.waitUntil(...)` (or `ctx.waitUntil(...)`) with `c.env.MY_WORKFLOW.create(...)` either way; whichever framework you use, the call site change is the same
 
 ## References
