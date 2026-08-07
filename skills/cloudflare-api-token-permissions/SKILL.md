@@ -27,12 +27,14 @@ Adding a binding to `wrangler.jsonc` doesn't fail locally (your `wrangler login`
 |---|---|---|
 | `Authentication error [code: 10000]` | `/accounts/<id>/r2/buckets/<name>` | `Account / Workers R2 Storage / Edit` |
 | `not authorized [code: 7403]` | `/accounts/<id>/d1/database/<id>/query` | `Account / D1 / Edit` |
-| `Authentication failed [code: 9106]` | `/memberships` | `Account / Account Settings / Read` (typically a follow-on after the first failure) |
+| `Authentication failed [code: 9106]` | `/memberships` | **Not a missing permission** — see the 9106 note below this table |
 | `Authentication error [code: 10000]` | `/accounts/<id>/workers/scripts/<name>` | `Account / Workers Scripts / Edit` |
 | `Authentication error [code: 10000]` | `/accounts/<id>/storage/kv/namespaces/<id>` | `Account / Workers KV Storage / Edit` |
 | `Authentication error [code: 10000]` | `/accounts/<id>/queues/<id>` | `Account / Queues / Edit` |
 
-**The first error in the log is the actionable one**; subsequent errors (especially `code: 9106` on `/memberships`) are usually consequences of the first failed auth call. Fix the first one and the rest disappear.
+**The first error in the log is the actionable one**; subsequent errors are usually consequences of the first failed auth call. Fix the first one and the rest disappear.
+
+**The 9106-on-`/memberships` special case** (verified 2026-08-08): `9106` is *not* a permission-missing code. It means a **user-level** endpoint was called without a user identity — either the token is an *Account owned* token (which structurally cannot call `/memberships`; wrangler ≥ 4.90 auto-falls back to `/accounts`), or the credential env var itself is broken. A *user* token that merely lacks the scope fails with `code: 10000` instead, and that one is fixed by `User / Memberships / Read` (User scope — `Account Settings / Read` covers `/accounts`, **not** `/memberships`). The durable fix either way: set `account_id` in `wrangler.jsonc` (or `CLOUDFLARE_ACCOUNT_ID` in CI) so wrangler skips the account-resolution endpoints entirely.
 
 ## Permission matrix (binding / command → required permission)
 
@@ -48,15 +50,16 @@ Adding a binding to `wrangler.jsonc` doesn't fail locally (your `wrangler login`
 | `hyperdrive` binding | `Account / Hyperdrive / Edit` |
 | `ai` (Workers AI) binding | `Account / Workers AI / Read` |
 | `browser` (Browser Rendering) binding | `Account / Browser Rendering / Edit` |
-| Memberships lookup (wrangler boilerplate) | `Account / Account Settings / Read` |
+| Memberships lookup (only fires when `account_id` is not set) | `User / Memberships / Read` (User scope) — or set `account_id` so the call never happens |
 
 For the typical small-app stack (SPA + API + D1 + R2 served from one Worker), the **minimum** token permission set is:
 
 - `Account / Workers Scripts / Edit`
 - `Account / D1 / Edit`
 - `Account / Workers R2 Storage / Edit`
-- `Account / Account Settings / Read`
 - Account Resources: `<your specific account>` (don't grant *All accounts* unless you have a reason)
+
+…plus **`account_id` set in `wrangler.jsonc`** (or `CLOUDFLARE_ACCOUNT_ID` in CI). With it, wrangler never calls the account-resolution endpoints (`/accounts`, `/memberships`) that would otherwise drag in `Account Settings / Read` / `User / Memberships / Read`.
 
 ## The "Edit Cloudflare Workers" template trap
 

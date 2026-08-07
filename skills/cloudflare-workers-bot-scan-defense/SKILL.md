@@ -200,7 +200,9 @@ pnpm exec wrangler versions view <version-id> --name <worker-name> | grep -E 'Ra
 > ⚠ **Wrangler 3.x renders neither `unsafe` ratelimit bindings nor `observability` in `versions view`.** On v3 the output lists only D1/KV/vars/secrets, so this check shows **nothing for the rate limiter even when it is correctly deployed** — a false negative, not a missing binding. (Run `wrangler versions view <id>` and you'll see the bindings section stop at `d1_databases`.) On v3, confirm via the **Dashboard** instead — Workers & Pages → `<worker>` → Settings → Bindings shows `AUTH_RATE_LIMITER`, and the Observability tab shows whether observability is on — or use the credential-free path below. This is the verification flow the `unsafe` fallback breaks; budget for it if you can't upgrade to 4.36+.
 
 ```bash
-# 2. Observability captures the route as a $metadata.trigger
+# 2. Observability captures the route as a $metadata.trigger ("METHOD /path" string;
+#    field verified against the Query API schema 2026-08 — it's not on the docs page.
+#    To filter by event *type* (fetch/cron/...) use $workers.eventType instead)
 # Cloudflare Dashboard → Workers → <name> → Observability → filter $metadata.trigger
 # Expected: "POST /api/auth/login/begin" shows up within 5-10 minutes of first traffic
 ```

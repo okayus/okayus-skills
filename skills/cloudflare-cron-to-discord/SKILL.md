@@ -39,7 +39,7 @@ Two rules:
 1. **The builder is pure**. No I/O, no `env`, no clock reads (take `now` as a parameter). This makes it trivially unit-testable and trivially replaceable (Phase N skeleton message → Phase N+1 domain logic).
 2. **The sender never throws**. All fetch failures are `console.error`'d and swallowed. Reasons:
    - Cron runs on a schedule. A single failed notification should not prevent the next one.
-   - There's no retry semantics to leverage anyway.
+   - There's no retry semantics to leverage anyway: Cloudflare documents no automatic retry for failed cron fires (they're only recorded in Past Events). `controller.noRetry()` exists in the API, but no documented platform behavior consumes it (verified 2026-08-08). If you need retries, use Durable Object Alarms or retry in-handler.
    - Throwing from a scheduled handler doesn't help the user — it just shows up as an opaque exception in the Dashboard.
 
 ## Core deliverables

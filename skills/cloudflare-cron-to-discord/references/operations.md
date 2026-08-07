@@ -115,7 +115,7 @@ pnpm exec wrangler secret list
 
 **Secret value check** — there's no direct way to read it. Indirect options:
 
-- **Fast**: Dashboard → Workers & Pages → `<project>` → Triggers → Cron → **"Send event" / "Run now"** button. With `wrangler tail` running, you'll see the cron fire and any `[discord] non-2xx` or `[discord] fetch failed` errors within seconds. Then check which Discord channel received the message — if wrong channel, the secret value is wrong
+- **Fast**: add a **temporary authenticated fetch endpoint** that calls the same code path as `scheduled()`, and curl it while `wrangler tail` runs — you'll see any `[discord] non-2xx` / `[discord] fetch failed` within seconds, and which Discord channel received the message (wrong channel = wrong secret value). Remove the endpoint afterwards. This is the pattern Cloudflare itself recommends: the Dashboard has **no** manual cron-fire button (the feature request was closed NOT_PLANNED — workers-sdk#3377, re-verified 2026-08-08)
 - **Slow**: Wait for the next scheduled fire and observe which channel receives
 
 If the message lands in the dev channel, the prod secret has the dev URL. Fix:
@@ -149,7 +149,7 @@ pnpm exec wrangler versions view <version-id> 2>&1 | head -50
 `wrangler tail` is real-time only — it doesn't show past events. For past cron fires, enable Dashboard Observability:
 
 1. Dashboard → Workers & Pages → `<project>` → **Observability** tab → **Enable**
-2. Wait for the next fire, or trigger manually via **Triggers → "Send event"**
+2. Wait for the next fire (or curl your temporary fetch endpoint, if you added one — the Dashboard has no manual cron-fire button)
 3. Filter invocations by `Event Type = Scheduled`
 
 Observability doesn't have retroactive data for fires that happened before enabling it.
@@ -204,7 +204,7 @@ For dev, edit `.dev.vars` and save.
 
 `wrangler secret put` is near-instant (a few seconds to propagate). After 30 seconds, manually trigger:
 
-Dashboard → Triggers → Send event. Confirm `wrangler tail` shows no `[discord] non-2xx`, and the correct channel receives the message.
+Fire the handler (temporary fetch endpoint, or wait for the next schedule — the Dashboard has no manual cron-fire button). Confirm `wrangler tail` shows no `[discord] non-2xx`, and the correct channel receives the message.
 
 If old behavior (401) persists past 30 seconds, force a redeploy:
 
@@ -298,7 +298,7 @@ You can run `wrangler dev` separately (typically port 8787) while `vite dev` is 
 Again — no direct way. The full procedure:
 
 1. Make sure `pnpm exec wrangler secret list` shows `DISCORD_WEBHOOK_URL`
-2. Dashboard → Triggers → Send event (manually trigger the scheduled handler)
+2. Fire the scheduled handler (temporary fetch endpoint calling the same code path, or wait for the next schedule — no manual Dashboard button exists)
 3. Watch `wrangler tail` for `[cron] fired at ...` and any `[discord] non-2xx`
 4. Watch both Discord channels — which one receives the message?
 5. Correct channel → secret is right. Wrong channel → secret has the other URL; rotate
