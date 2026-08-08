@@ -154,18 +154,35 @@ const isTipAlreadyMerged = async (branch, sha, token) => {
   return closed.some((p) => p.merged_at !== null && p.head.sha === sha);
 };
 
+// GitHub rejects any push that creates/updates .github/workflows/** unless the
+// App holds the `workflows` permission. We deliberately do NOT grant it, so the
+// agent pipeline cannot modify its own CI gate (the merge backstop). Detect that
+// specific rejection and surface it as a clean REFUSE instead of a generic
+// crashing error — the change has to be landed by a human-credentialed push.
+const WORKFLOW_PERM_REJECT = /refusing to allow .* workflow|without .?workflows.? permission/i;
+
 const pushBranch = (branch, token) => {
   // First -c credential.helper= RESETS the helper list — otherwise a global
   // `gh` helper silently wins and pushes as the human user, not the App.
   // Token travels via env, never argv/disk. Exact refspec, no force.
-  git(
-    [
-      "-c", "credential.helper=",
-      "-c", `credential.helper=!f() { echo username=x-access-token; echo "password=$GIT_RELAY_TOKEN"; }; f`,
-      "push", "origin", `refs/heads/${branch}:refs/heads/${branch}`,
-    ],
-    { GIT_RELAY_TOKEN: token },
-  );
+  try {
+    git(
+      [
+        "-c", "credential.helper=",
+        "-c", `credential.helper=!f() { echo username=x-access-token; echo "password=$GIT_RELAY_TOKEN"; }; f`,
+        "push", "origin", `refs/heads/${branch}:refs/heads/${branch}`,
+      ],
+      { GIT_RELAY_TOKEN: token },
+    );
+  } catch (e) {
+    const out = [e.stderr, e.stdout, e.message].filter(Boolean).join("\n");
+    if (WORKFLOW_PERM_REJECT.test(out)) {
+      const err = new Error("workflow-file change needs a human push (App lacks `workflows` permission — by design)");
+      err.code = "WORKFLOW_PERM";
+      throw err;
+    }
+    throw e;
+  }
 };
 
 const ensurePullRequest = async (branch, token) => {
@@ -256,7 +273,15 @@ const processBranch = async (name, sha, getToken) => {
     return;
   }
   if (remote !== sha) {
-    pushBranch(name, token);
+    try {
+      pushBranch(name, token);
+    } catch (e) {
+      if (e.code === "WORKFLOW_PERM") {
+        log(`REFUSE ${name}: ${e.message}`);
+        return; // not an error — land workflow changes with a human push; the relay PRs it next tick
+      }
+      throw e;
+    }
     log(`pushed ${name} (${sha.slice(0, 7)})`);
   }
   const pr = await ensurePullRequest(name, token);
