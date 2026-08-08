@@ -5,8 +5,10 @@ results. The compensating control is a **repository ruleset** on the default bra
 PR required + required status check + no force pushes + **no bypass actors** (even
 the repo owner/admin cannot push main directly — `current_user_can_bypass: "never"`).
 
-Free plan note: ruleset *enforcement* is free on **public** repos; private repos
-need a paid plan. Decide visibility before relying on this gate.
+Plan note (verified 2026-08-08): ruleset *enforcement* is free on **public** repos.
+On **private** repos it needs personal Pro / org Team or above — on a Free plan you
+can *create* the ruleset but it is **not enforced** (the UI warns "won't be enforced
+... until you upgrade"). Decide visibility before relying on this gate.
 
 ```bash
 gh api repos/<owner>/<repo>/rulesets -X POST --input - <<'JSON'

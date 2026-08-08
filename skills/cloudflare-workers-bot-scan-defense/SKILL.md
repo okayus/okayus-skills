@@ -1,8 +1,8 @@
 ---
 name: cloudflare-workers-bot-scan-defense
-description: Make a Cloudflare Workers app resilient to bot scans that arrive within minutes of HTTPS publication via CT Log enumeration. Use when deploying a new Worker (especially with auth or paid bindings), when budget/cost is a concern, or when you want to detect "/.env" / "/admin" / "/wp-login.php" / "/.git/config" probing. Covers the mental model (CT Log → bot scan → which paths actually cost you money), the edge-cache absorption that makes most scans free, the narrow set of unauthenticated routes that do need rate limiting (auth `begin`/`verify`), the exact `wrangler.jsonc` `observability` + `ratelimits` config (plus the wrangler 3.x `unsafe.bindings` fallback for projects still on v3), the IP-keyed Hono middleware pattern (with the fail-open variant), the verification flow via `wrangler versions view` + Workers Observability — including the trap that v3's `versions view` renders neither the `unsafe` ratelimit binding nor `observability`, and a credential-free verification path for sandboxed agents / keyless CI — and the documented eventual-consistency caveat that makes synthetic burst tests look like the limiter is broken.
+description: Make a Cloudflare Workers app resilient to bot scans that arrive within minutes of HTTPS publication via CT Log enumeration. Use when deploying a new Worker (especially with auth or paid bindings), when budget/cost is a concern, or when you want to detect "/.env" / "/admin" / "/wp-login.php" / "/.git/config" probing. Covers the mental model (which paths actually cost you money — most are absorbed by the edge cache), the narrow set of unauthenticated routes that do need rate limiting (auth `begin`/`verify`), the exact `wrangler.jsonc` `observability` + `ratelimits` config (plus the wrangler 3.x `unsafe.bindings` fallback), the IP-keyed Hono middleware pattern with fail-open variant, the deploy verification flow (`wrangler versions view` + Workers Observability, including a credential-free path for sandboxed agents / keyless CI), and the documented eventual-consistency caveat that makes synthetic burst tests look like the limiter is broken.
 license: MIT
-compatibility: Designed for Claude Code and similar agents. Targets Cloudflare Workers (Free or Paid) with `@cloudflare/workers-types@4.20240000+`, `wrangler@^4.36.0` (the top-level `ratelimits` key), Hono / D1 / R2 stacks, and either `*.workers.dev` or a custom domain. Projects still on **wrangler 3.x** can use the `unsafe.bindings` fallback in "Add a Workers Rate Limit binding" below. Workers Rate Limiting binding is GA on both Free and Paid; Workers Observability requires enabling per-Worker via `wrangler.jsonc`.
+compatibility: Designed for Claude Code and similar agents. Targets Cloudflare Workers (Free or Paid) with `@cloudflare/workers-types@4.20240000+`, `wrangler@^4.36.0` (the top-level `ratelimits` key), Hono / D1 / R2 stacks, and either `*.workers.dev` or a custom domain. Projects still on **wrangler 3.x** can use the `unsafe.bindings` fallback in "Add a Workers Rate Limit binding" below. Rate Limiting is GA on Free and Paid; new Workers ship with Observability on by default.
 metadata:
   author: okayus
   version: "0.2.0"
@@ -30,7 +30,7 @@ Do **not** apply the rate-limit binding portion for:
 - A Worker that returns hard 401/403 with no DB hit on every unauthenticated route (you're already fine — bots can't drain you)
 - A Worker fronted by Cloudflare Access / IP allowlist where every route is already gated above the Worker layer (Access returns 302/403 before the Worker is invoked, so there's nothing left to rate-limit). **Caveat**: a custom domain protected by Access does *not* automatically protect the `<worker-name>.<account>.workers.dev` URL — that endpoint stays open by default and bypasses your Access policy. Set `workers_dev: false` in `wrangler.jsonc` to close it (recommended), or attach a separate Access application targeting the `*.workers.dev` hostname (Dashboard → Zero Trust → Access → Applications → Add → Self-hosted, with the workers.dev hostname). Verify with `curl -I https://<worker-name>.<account>.workers.dev/` after deploy — expect a 302 redirect or 403.
 - DDoS-grade attacks (you need WAF / Cloudflare Pro+ rules, not just a Worker binding)
-- Application-level brute force (e.g., trying credentials against a known username) — that's `auth-brute-force` territory and needs per-account lockout, not just per-IP rate limit
+- Application-level brute force (e.g., trying credentials against a known username) — that needs per-account lockout, a different design layer (no dedicated skill in this repo yet), not just per-IP rate limit
 
 ## The mental model — what bots actually drain
 
@@ -93,7 +93,7 @@ Add to `wrangler.jsonc`:
 }
 ```
 
-`head_sampling_rate: 1` = 100%. For a low-traffic family/internal app this is fine; for a high-traffic public app drop to `0.1` or `0.01` to control cost. Without this block the Workers Observability dataset is **empty for your script** — you literally cannot see scan traffic.
+`head_sampling_rate: 1` = 100%. For a low-traffic family/internal app this is fine; for a high-traffic public app drop to `0.1` or `0.01` to control cost. **New Workers ship with Observability enabled by default** (verified 2026-08-07), so on a fresh deploy this block is confirmation rather than activation — keep it explicit anyway: pre-existing Workers, or ones where it was switched off, otherwise sit with an **empty dataset for your script**, and you literally cannot see scan traffic.
 
 ### 2. Add a Workers Rate Limit binding
 
@@ -200,7 +200,9 @@ pnpm exec wrangler versions view <version-id> --name <worker-name> | grep -E 'Ra
 > ⚠ **Wrangler 3.x renders neither `unsafe` ratelimit bindings nor `observability` in `versions view`.** On v3 the output lists only D1/KV/vars/secrets, so this check shows **nothing for the rate limiter even when it is correctly deployed** — a false negative, not a missing binding. (Run `wrangler versions view <id>` and you'll see the bindings section stop at `d1_databases`.) On v3, confirm via the **Dashboard** instead — Workers & Pages → `<worker>` → Settings → Bindings shows `AUTH_RATE_LIMITER`, and the Observability tab shows whether observability is on — or use the credential-free path below. This is the verification flow the `unsafe` fallback breaks; budget for it if you can't upgrade to 4.36+.
 
 ```bash
-# 2. Observability captures the route as a $metadata.trigger
+# 2. Observability captures the route as a $metadata.trigger ("METHOD /path" string;
+#    field verified against the Query API schema 2026-08 — it's not on the docs page.
+#    To filter by event *type* (fetch/cron/...) use $workers.eventType instead)
 # Cloudflare Dashboard → Workers → <name> → Observability → filter $metadata.trigger
 # Expected: "POST /api/auth/login/begin" shows up within 5-10 minutes of first traffic
 ```
@@ -215,7 +217,7 @@ If 1 + 2 + 3 all pass, you're correctly configured **even if the next step (synt
 
 ### Verifying without Cloudflare credentials (sandboxed agents / keyless CI)
 
-Checks 1 and 2 above need an authenticated Cloudflare session (`wrangler versions view`, the Dashboard). If your deploy pipeline is *keyless* — e.g. Cloudflare Workers Builds plus a sandboxed agent that deliberately holds **no** Cloudflare credential — you cannot run them, and that's by design, not a gap to paper over: reading deployed account state is exactly the operation the credential boundary exists to gate. The blocker is the absent credential, **not** egress (a locked-down sandbox can still reach `api.cloudflare.com` and your prod host if they're allowlisted). Verify these ways instead, no credential required:
+Checks 1 and 2 above need an authenticated Cloudflare session (`wrangler versions view`, the Dashboard). If your deploy pipeline is *keyless* — e.g. Cloudflare Workers Builds plus a sandboxed agent that deliberately holds **no** Cloudflare credential (the [`cloudflare-workers-builds-keyless-deploy`](../cloudflare-workers-builds-keyless-deploy/SKILL.md) + [`sandboxed-agent-git-relay`](../sandboxed-agent-git-relay/SKILL.md) setup) — you cannot run them, and that's by design, not a gap to paper over: reading deployed account state is exactly the operation the credential boundary exists to gate. The blocker is the absent credential, **not** egress (a locked-down sandbox can still reach `api.cloudflare.com` and your prod host if they're allowlisted). Verify these ways instead, no credential required:
 
 - **Source + pipeline truth.** The deployed config *is* `wrangler.jsonc` in the merged branch, built by your git-connected CI. Read the `observability` / `ratelimits` (or `unsafe.bindings`) block and the consuming middleware, then confirm the build is green over unauthenticated GitHub REST: `curl -s https://api.github.com/repos/<owner>/<repo>/commits/<branch>/check-runs` and look for your build check `conclusion: success`. Config-in-VCS + green keyless build ⇒ deployed.
 - **Behavioral black-box for the rate limiter.** Burst the protected route from one IP and watch for `429`: `for i in $(seq 1 40); do curl -s -o /dev/null -w '%{http_code}\n' https://<host>/<protected-route>; done | sort | uniq -c`. **A 429 is positive proof the binding is live and enforcing** — decisive with the fail-open middleware (no binding ⇒ it can never 429). The converse does *not* hold: **no 429 is inconclusive**, because Workers Rate Limiting is eventually consistent and per-colo (see "The synthetic burst test caveat"). So treat 429-seen as a green check and absence as "unknown, fall back to source+pipeline".
@@ -244,7 +246,7 @@ Full caveat list and decision matrix (binding vs. WAF rule) in [references/cavea
 ## What this skill does NOT cover
 
 - **DDoS protection** — that's Cloudflare WAF / Pro+ / managed rules, not Worker binding. If you're under sustained attack, escalate to WAF.
-- **Per-account brute force lockout** — login throttling by username/account, not by IP. Different design (you need a `failed_login_attempts` table + cooldown), and `auth-brute-force` skills cover that.
+- **Per-account brute force lockout** — login throttling by username/account, not by IP. Different design (you need a `failed_login_attempts` table + cooldown); no dedicated skill in this repo yet.
 - **Captcha / Turnstile integration** — orthogonal layer above rate limiting, useful for signup endpoints and webhooks but not covered here.
 - **Custom WAF Rate Limiting Rules** — Dashboard configuration, not `wrangler.jsonc`. Cross-references this skill but is its own setup flow.
 - **Bot Fight Mode / Super Bot Fight Mode** — Cloudflare's managed bot detection, configurable in Dashboard. Useful in tandem with this skill but not part of the deliverable.

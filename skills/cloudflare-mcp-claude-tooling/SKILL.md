@@ -27,16 +27,17 @@ Cloudflare ships several hosted MCP servers (`https://*.mcp.cloudflare.com/mcp`)
 | Server | Auth | Verdict |
 |---|---|---|
 | `cloudflare-docs` (`docs.mcp.cloudflare.com`) | **none** | **Take it.** Searches Cloudflare docs — something `wrangler` cannot do. Connects with no OAuth. |
+| unified `Cloudflare API` (`mcp.cloudflare.com/mcp`) | OAuth **or API token** | Skip by default — same `wrangler` overlap. If you ever do need account ops via MCP, this is the current first choice (token auth, Code Mode). |
 | `cloudflare-bindings` (`bindings.mcp.cloudflare.com`) | OAuth | Skip. Overlaps `wrangler d1/kv/r2`. |
 | `cloudflare-builds` (`builds.mcp.cloudflare.com`) | OAuth | Skip. |
 | `cloudflare-observability` (`observability.mcp.cloudflare.com`) | OAuth | Skip. Overlaps `wrangler tail`. |
 
 **Why docs-only:**
 - The account-touching servers **duplicate `wrangler`**, which the in-container agent already runs (allowlisted below). You lose little by leaving them out.
-- Their **OAuth is fragile inside a container.** Claude Code's *login* uses a paste-code flow (no callback) so it works in the sandbox — but **MCP** OAuth redirects to `http://localhost:<port>/callback`, and that "localhost" is the *host*, not the container. The callback port is often dynamic, and the listener may bind container-127.0.0.1, so publishing the port may not even help. Net: high-friction, low-payoff.
+- **OAuth from inside the container is no longer a blocker** — since Claude Code 2.1.191, MCP OAuth in headless environments prints the authorization URL and accepts the redirect URL pasted back (same paste-style flow as Claude Code login; `--no-browser` forces it). No localhost callback, no port publishing. It's still an extra per-rebuild approval dance, but the decisive reason to skip these servers is the `wrangler` overlap above, not OAuth friction. (Verified against the Claude Code changelog + MCP docs, 2026-08-07.)
 - `docs` needs no auth and is the highest-value server for *writing* Workers/wrangler config correctly.
 
-> If you later genuinely need an account MCP server, prefer **API-token (Bearer header)** auth over the browser flow — Cloudflare's remote servers accept a token (this is how the OpenAI Responses API uses them). Mint a least-privilege token per the [`cloudflare-api-token-permissions`](../cloudflare-api-token-permissions/SKILL.md) matrix and pass it via `headers` with `${ENV}` expansion in `.mcp.json`. Callback-free and sandbox-friendly.
+> If you later genuinely need an account MCP server, the unified `mcp.cloudflare.com/mcp` is the current first candidate — it officially supports **API-token (Bearer header)** auth alongside OAuth. Mint a least-privilege token per the [`cloudflare-api-token-permissions`](../cloudflare-api-token-permissions/SKILL.md) matrix and pass it via `headers` with `${ENV}` expansion in `.mcp.json`. Token auth stays callback-free; OAuth is also workable in-container since Claude Code 2.1.191 (paste-the-redirect-URL flow). Lineup verified 2026-08-07.
 
 ## Files to create (templates in references/)
 
@@ -53,7 +54,7 @@ Cloudflare ships several hosted MCP servers (`https://*.mcp.cloudflare.com/mcp`)
               "WebFetch(domain:developers.cloudflare.com)", "WebFetch(domain:docs.mcp.cloudflare.com)" ],
    "deny":  [ "Bash(git push:*)", "Bash(git commit:*)" ]
    ```
-   The `deny` is the point: it turns "git happens on the host, not in the sandbox" from a CLAUDE.md *convention* into an **execution-level guard** — the in-container agent literally cannot commit/push (keeping GitHub credentials out of the boundary). Allow only the *read* git/gh verbs.
+   The `deny` is the point: it turns "git happens on the host, not in the sandbox" from a CLAUDE.md *convention* into an **execution-level guard** — the in-container agent literally cannot commit/push (keeping GitHub credentials out of the boundary). Allow only the *read* git/gh verbs. The template also sets `"enableAllProjectMcpServers": false` — servers from the committed `.mcp.json` get approved individually rather than wholesale.
 
 3. **`.gitignore`** additions — keep per-user/secret config out of git:
    ```
@@ -77,7 +78,8 @@ Before the walking skeleton, stress-test the plan. Install [`grill-with-docs`](h
 
 ```sh
 mkdir -p <project>/.claude/skills/grill-with-docs
-# copy SKILL.md + CONTEXT-FORMAT.md + ADR-FORMAT.md from the upstream repo
+# copy the upstream skill directory WHOLESALE — its internal layout has changed
+# before (2026-08 it holds SKILL.md + agents/); don't cherry-pick named files
 ```
 
 Then run `/grill-with-docs` and let it interview you one question at a time, capturing vocabulary in `CONTEXT.md` and hard-to-reverse decisions in `docs/adr/NNNN-*.md`. Good first targets: auth method, public/private model, scoring/grading rules — the choices that are expensive to change after code exists.
@@ -86,6 +88,8 @@ Then run `/grill-with-docs` and let it interview you one question at a time, cap
 
 ```sh
 # docs MCP connected, account servers absent:
+# (run AFTER approving workspace trust in an interactive session — since Claude Code
+#  2.1.196, unapproved project servers show "⏸ Pending approval" here instead)
 docker compose exec -T dev claude mcp list | grep cloudflare        # → cloudflare-docs: ... ✓ Connected
 # egress reaches docs, non-allowlisted host still blocked:
 docker compose exec -T dev sh -c 'curl -so/dev/null -w "%{http_code}\n" https://docs.mcp.cloudflare.com/'   # 404 = reachable

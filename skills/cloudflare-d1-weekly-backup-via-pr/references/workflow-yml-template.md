@@ -118,6 +118,7 @@ Add a step after the PR creation:
         if: success()
         env:
           WEBHOOK: ${{ secrets.DISCORD_WEBHOOK_URL }}
+          GH_TOKEN: ${{ github.token }}  # gh CLI refuses to run in Actions without this
         run: |
           PR_URL=$(gh pr list --label backup --state open --limit 1 --json url --jq '.[0].url')
           curl -X POST -H 'Content-Type: application/json' \
@@ -134,9 +135,13 @@ A zero-byte or sub-1-KB backup file usually means the export silently failed (D1
 ```yaml
       - name: Sanity check backup size
         run: |
-          SIZE=$(stat -c%s backups/backup-weekly-*.sql)
+          # newest file only — the glob matches every accumulated backup, and a
+          # multi-line $SIZE would make the -lt test error out (and the step
+          # still exit 0, silently skipping the check)
+          NEWEST=$(ls -t backups/backup-weekly-*.sql | head -1)
+          SIZE=$(stat -c%s "$NEWEST")
           if [ "$SIZE" -lt 1024 ]; then
-            echo "Backup is suspiciously small (${SIZE} bytes). Failing."
+            echo "Backup ${NEWEST} is suspiciously small (${SIZE} bytes). Failing."
             exit 1
           fi
 ```

@@ -32,7 +32,6 @@
       "Bash(gh pr diff:*)",
       "Bash(gh issue view:*)",
       "Bash(gh issue list:*)",
-      "Bash(gh api:*)",
       "WebFetch(domain:code.claude.com)",
       "WebFetch(domain:developers.cloudflare.com)",
       "WebFetch(domain:docs.mcp.cloudflare.com)"

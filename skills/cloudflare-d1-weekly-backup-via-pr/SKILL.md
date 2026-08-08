@@ -205,7 +205,7 @@ grep "INSERT INTO credentials" backups/backup-weekly-2026-04-23.sql | \
 ## Scope boundary — what this skill does NOT cover
 
 - Pre-migration backup runbooks (different cadence, ad-hoc) — see `cloudflare-d1-drizzle-migration` skill
-- Real-time replication / point-in-time recovery — out of scope; D1 doesn't natively support PITR yet
+- Point-in-time recovery — D1 has this built in: [Time Travel](https://developers.cloudflare.com/d1/reference/time-travel/) restores to any minute within 30 days (paid) / 7 days (free) via `wrangler d1 time-travel restore`. This skill exists for what Time Travel does **not** give you: retention beyond that window, an off-platform copy, and a reviewable dump in git. Real-time replication remains out of scope
 - Encrypting backups at rest — if you need this, you've outgrown commit-to-git anyway; switch to R2 with KMS
 - Restoring to a different D1 database (test environment from prod) — possible but adds quoting nuances; future skill if it becomes common
 - Cron timezone management for non-UTC schedules with DST — accept the drift, or use a timezone-stable midnight UTC slot

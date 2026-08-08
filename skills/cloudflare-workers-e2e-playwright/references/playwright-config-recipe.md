@@ -77,6 +77,20 @@ export default defineConfig({
 
 Replace `<your-bundle>` with the Worker name from your `wrangler.jsonc` (e.g. `routine_tasks` for `name: "routine-tasks"`). Inspect `dist/` after a build to confirm the directory name.
 
+## Docker-sandbox variant (three divergences)
+
+This recipe targets a normal host. Running inside the `claude-code-docker-sandbox`
+container changes three things — full story in the `playwright-e2e-in-docker-sandbox`
+skill:
+
+1. **No `e2e:install`.** The egress firewall blocks the Playwright CDN at runtime; the
+   browser is baked into the image at build time instead (`INSTALL_PLAYWRIGHT` build arg).
+2. **`127.0.0.1`, not `localhost`.** `baseURL`, the `--ip` bind, and `ORIGIN` all use the
+   literal IP — a `localhost` bind stalls on dual-stack resolution in-container.
+3. **Gated `--no-sandbox` + config strip.** `launchOptions: process.env.DEVCONTAINER ?
+   { args: ["--no-sandbox"] } : {}`, and a `prepare-config.ts` strips the rate-limit
+   binding (`unsafe` / `ratelimits`) from the built config.
+
 ## Why these specific settings
 
 - `fullyParallel: false`, `workers: 1`: local D1 is a single sqlite file, parallel tests would corrupt state. Force serial execution.

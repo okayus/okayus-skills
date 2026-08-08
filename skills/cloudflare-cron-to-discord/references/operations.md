@@ -91,7 +91,7 @@ When scheduling-to-Discord goes wrong, figure out what you're seeing before debu
 |---|---|---|---|
 | ✓ | ✓ | Nothing wrong | You're done |
 | ✓ | ✗ | Prod secret wrong, deploy not reflected, or Cron not firing in prod | B-1 → B-2 → B-3 below |
-| ✗ | ✓ | `.dev.vars` missing / wrong, OR `/__scheduled` not routed (skip path) | Verify `.dev.vars`; acknowledge `/__scheduled` 0.1.x caveat |
+| ✗ | ✓ | `.dev.vars` missing / wrong, OR no local scheduled endpoint (0.1.x baseline) | Verify `.dev.vars`; on current toolchains use `/cdn-cgi/handler/scheduled` (see below) |
 | ✗ | ✗ | Code-level issue, or webhook URL itself invalid | Check `pnpm test`, then webhook URL validity |
 | Dev msg → prod ch | — | `.dev.vars` has prod URL (you pasted prod URL into dev) | Re-paste correct URL to `.dev.vars`, consider rotating prod webhook (dev may have logged prod URL) |
 | Prod msg → dev ch | — | Prod secret has dev URL | `wrangler secret put DISCORD_WEBHOOK_URL` with correct prod URL, verify via manual trigger |
@@ -115,7 +115,7 @@ pnpm exec wrangler secret list
 
 **Secret value check** — there's no direct way to read it. Indirect options:
 
-- **Fast**: Dashboard → Workers & Pages → `<project>` → Triggers → Cron → **"Send event" / "Run now"** button. With `wrangler tail` running, you'll see the cron fire and any `[discord] non-2xx` or `[discord] fetch failed` errors within seconds. Then check which Discord channel received the message — if wrong channel, the secret value is wrong
+- **Fast**: add a **temporary authenticated fetch endpoint** that calls the same code path as `scheduled()`, and curl it while `wrangler tail` runs — you'll see any `[discord] non-2xx` / `[discord] fetch failed` within seconds, and which Discord channel received the message (wrong channel = wrong secret value). Remove the endpoint afterwards. This is the pattern Cloudflare itself recommends: the Dashboard has **no** manual cron-fire button (the feature request was closed NOT_PLANNED — workers-sdk#3377, re-verified 2026-08-08)
 - **Slow**: Wait for the next scheduled fire and observe which channel receives
 
 If the message lands in the dev channel, the prod secret has the dev URL. Fix:
@@ -149,7 +149,7 @@ pnpm exec wrangler versions view <version-id> 2>&1 | head -50
 `wrangler tail` is real-time only — it doesn't show past events. For past cron fires, enable Dashboard Observability:
 
 1. Dashboard → Workers & Pages → `<project>` → **Observability** tab → **Enable**
-2. Wait for the next fire, or trigger manually via **Triggers → "Send event"**
+2. Wait for the next fire (or curl your temporary fetch endpoint, if you added one — the Dashboard has no manual cron-fire button)
 3. Filter invocations by `Event Type = Scheduled`
 
 Observability doesn't have retroactive data for fires that happened before enabling it.
@@ -204,7 +204,7 @@ For dev, edit `.dev.vars` and save.
 
 `wrangler secret put` is near-instant (a few seconds to propagate). After 30 seconds, manually trigger:
 
-Dashboard → Triggers → Send event. Confirm `wrangler tail` shows no `[discord] non-2xx`, and the correct channel receives the message.
+Fire the handler (temporary fetch endpoint, or wait for the next schedule — the Dashboard has no manual cron-fire button). Confirm `wrangler tail` shows no `[discord] non-2xx`, and the correct channel receives the message.
 
 If old behavior (401) persists past 30 seconds, force a redeploy:
 
@@ -214,9 +214,9 @@ pnpm --filter @<scope>/web run deploy
 
 This rebuilds and re-uploads the Worker, forcing a fresh isolate that reads the new secret.
 
-### 5. Document in status.md
+### 5. Document the rotation
 
-Record webhook rotation in the project's `docs/status.md` operational notes. Include:
+Record webhook rotation in your project's operational notes (wherever those live — an ops log, `docs/status.md`, a runbook). Include:
 
 - Date of rotation
 - Reason (leak / scheduled / compromise)
@@ -224,11 +224,21 @@ Record webhook rotation in the project's `docs/status.md` operational notes. Inc
 
 Rotation tracking helps spot patterns (e.g., if rotations happen more than yearly without a leak, something's off).
 
-## The `/__scheduled` dev caveat in detail
+## Local Cron testing in detail
 
-### What doesn't work
+### What works on current toolchains (verified 2026-08-07)
 
-`@cloudflare/vite-plugin@0.1.21` (the baseline that ships with `wrangler@3.x`) does not implement `/__scheduled?cron=<expr>` for local Cron testing. A curl:
+Both `wrangler dev` (default `:8787`) and `@cloudflare/vite-plugin@1.x` (default `:5173`) expose the official local test endpoint:
+
+```bash
+curl "http://localhost:5173/cdn-cgi/handler/scheduled?cron=15+*+*+*+*"
+```
+
+The `cron` query param should match an expression in `triggers.crons`. `wrangler dev` can additionally fire the handler interactively with the `s` hotkey. Source: <https://developers.cloudflare.com/workers/configuration/cron-triggers/>.
+
+### What doesn't work (`@cloudflare/vite-plugin@0.1.x` legacy)
+
+`@cloudflare/vite-plugin@0.1.21` (the baseline that shipped with `wrangler@3.x`) implements **no** local Cron endpoint — neither the old `/__scheduled` nor the current path. A curl:
 
 ```bash
 curl -i "http://localhost:5173/__scheduled?cron=0+*+*+*+*"
@@ -244,13 +254,13 @@ grep -A 1 '@cloudflare/vite-plugin' pnpm-lock.yaml | head -5
 
 ### Options
 
-**Option A — skip local, rely on tests + production verification** (practical default):
+**Option A — skip local, rely on tests + production verification** (for the 0.1.x baseline when you won't bump):
 
 - Run `pnpm test` (10 green) to prove the logic is correct
 - After deploying, watch `wrangler tail` for the next Cron fire
 - Trigger via Dashboard → Triggers → "Send event" for immediate verification without waiting
 
-This is what the reference `routine-tasks` project uses.
+This is the practical default for small projects.
 
 **Option B — bump `@cloudflare/vite-plugin` to 1.x**:
 
@@ -275,20 +285,20 @@ pnpm --filter @<scope>/web update wrangler --latest
 Which bumps to `^4.x`. Then update any wrangler command in docs / scripts:
 
 - `wrangler deployments view` → `wrangler versions view`
-- Other renames — see <https://developers.cloudflare.com/workers/wrangler/migration/v3-to-v4/>
+- Other renames — see <https://developers.cloudflare.com/workers/wrangler/migration/update-v3-to-v4/>
 
 **When is Option B worth it?** When you're iterating heavily on Cron schedule changes or testing Cron-triggered D1 queries locally, Option A's "deploy and see" loop becomes slow. Otherwise Option A is cheaper.
 
 **Option C — `wrangler dev` in parallel with `vite dev`** (legacy):
 
-You can run `wrangler dev` separately (typically port 8787) while `vite dev` is on 5173. `wrangler dev` hits the actual Worker and does implement `/__scheduled`. But routing requests between the two ports is painful, and not worth setting up for most cases. Mentioned for completeness.
+You can run `wrangler dev` separately (typically port 8787) while `vite dev` is on 5173. `wrangler dev` hits the actual Worker and does implement the local scheduled endpoint (`/cdn-cgi/handler/scheduled` on wrangler 4; `/__scheduled` in the wrangler 3 era). But routing requests between the two ports is painful, and not worth setting up for most cases. Mentioned for completeness.
 
 ## Secret value check: is my prod secret correct?
 
 Again — no direct way. The full procedure:
 
 1. Make sure `pnpm exec wrangler secret list` shows `DISCORD_WEBHOOK_URL`
-2. Dashboard → Triggers → Send event (manually trigger the scheduled handler)
+2. Fire the scheduled handler (temporary fetch endpoint calling the same code path, or wait for the next schedule — no manual Dashboard button exists)
 3. Watch `wrangler tail` for `[cron] fired at ...` and any `[discord] non-2xx`
 4. Watch both Discord channels — which one receives the message?
 5. Correct channel → secret is right. Wrong channel → secret has the other URL; rotate

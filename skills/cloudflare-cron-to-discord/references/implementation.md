@@ -194,7 +194,7 @@ In `packages/web/package.json`:
  },
  "devDependencies": {
    ...
-+  "vitest": "^2.1.0"
++  "vitest": "^4.0.0"
  }
 ```
 

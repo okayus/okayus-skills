@@ -91,7 +91,18 @@ If counts dropped → go to step 7 **immediately**. Every minute of delay is a m
 
 ## 7. Restore from backup (if step 6 showed loss)
 
-Extract just the INSERT statements for the lost child table:
+Two restore paths — pick by blast radius:
+
+**Path A — Time Travel whole-DB rewind.** Fastest when the loss was caught immediately and losing *all* writes since the migration (the migration itself included) is acceptable:
+
+```bash
+pnpm exec wrangler d1 time-travel info <db>
+pnpm exec wrangler d1 time-travel restore <db> --timestamp=<pre-migration-time>
+```
+
+The rewind also reverts `d1_migrations`, so re-apply the (fixed) migration afterwards. See [pitfalls.md §4](d1-drizzle-kit-pitfalls.md) for the Time Travel vs export split.
+
+**Path B — surgical INSERT extract** (keeps the new schema and post-migration writes to other tables). Extract just the INSERT statements for the lost child table:
 
 ```bash
 grep '^INSERT INTO "<child>"' backups/<date>-pre-<summary>.sql > backups/restore-<child>.sql

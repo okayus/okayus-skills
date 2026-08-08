@@ -160,14 +160,14 @@ Pick deliberately based on how long the user will tolerate `status='running'` in
 |---|---|
 | `console.log` from a `fetch` handler | `wrangler tail` |
 | Errors thrown from a `fetch` handler | `wrangler tail` (as `(error)` lines) |
-| `console.log` from inside `step.do(...)` | **Not in `wrangler tail`**. Cloudflare Dashboard → your Worker → Workflows tab → instance detail |
+| `console.log` from inside `step.do(...)` | **Not in `wrangler tail`**. Dashboard **Workflows page** (account-level) → workflow → instance detail — or `wrangler workflows instances describe <NAME> <ID>` |
 | Step retries / failures | Dashboard, per instance |
 | Workflow status (running / errored / complete) | Dashboard + your own DB row, if you wrote one |
 
 When debugging a hung workflow:
 
 1. **D1 first** — `SELECT status, error_message FROM <table> WHERE id = ?`. If `status='failed'`, error_message tells you what threw.
-2. **Dashboard second** — Workflows tab shows step-by-step execution. If a step is stuck, this is where you see "still running attempt 2 of 3, started 8 minutes ago".
+2. **Dashboard / CLI second** — the account-level Workflows page, or `wrangler workflows instances describe <NAME> <ID>` (prints logs, retries, errors, and step output in the terminal), shows step-by-step execution. If a step is stuck, this is where you see "still running attempt 2 of 3, started 8 minutes ago".
 3. **`wrangler tail` for the fetch entry** — confirms the workflow was kicked off (the `POST` line) but won't show step internals.
 
 The mistake to avoid: spending 10 minutes staring at `wrangler tail` waiting for step logs that will never appear there.

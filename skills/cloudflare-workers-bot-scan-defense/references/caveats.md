@@ -48,7 +48,7 @@ What you can verify reliably:
 
 1. **Configuration**: `wrangler versions view <id>` shows the `Rate Limit` binding row
 2. **Code path**: `grep` the bundle for `rate_limited` and your binding name
-3. **Telemetry**: Workers Observability captures the route's invocations with `$metadata.trigger`
+3. **Telemetry**: Workers Observability captures the route's invocations with `$metadata.trigger` (a "METHOD /path" string — verified against the Query API schema 2026-08; for filtering by event *type* use `$workers.eventType`)
 
 What you can't reliably verify with a 5-minute test:
 

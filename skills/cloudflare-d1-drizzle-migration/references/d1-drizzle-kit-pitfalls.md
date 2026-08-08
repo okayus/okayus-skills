@@ -43,7 +43,7 @@ Triggers that are safe (additive):
 - `ADD COLUMN` with no constraints or with a default — uses `ALTER TABLE ADD`, not a rebuild
 - `CREATE INDEX` — no table touch
 - New tables entirely
-- Adding a new NULLABLE `.references()` column at the same time as the column (wait — does this rebuild? verify on a spike)
+- Adding a new NULLABLE `.references()` column in the same migration — **classification unverified**: drizzle-kit may emit a rebuild for the FK. Run a spike and read the generated SQL before treating this as additive
 
 Always read the generated SQL before trusting a classification.
 
@@ -62,10 +62,21 @@ Alternatives:
 
 For nyalog-style "records belong to cat, cat delete → records gone" semantics, `cascade` is correct domain behavior. Just be aware of the migration cost.
 
-## 4. `wrangler d1 export --remote` is the only reliable backup
+## 4. Backups: Time Travel is D1's built-in PITR; `wrangler d1 export` complements it
 
-D1 doesn't offer point-in-time restore at the time of writing. `wrangler d1 export` is your escape hatch. Three things to know:
+D1 **does** offer point-in-time restore: [Time Travel](https://developers.cloudflare.com/d1/reference/time-travel/) is always on (30-day history on paid plans, 7-day on free) and can rewind the whole database to any minute in that window — the docs name "restore a database prior to a failed migration or schema change" as a primary use case (verified 2026-08-07):
 
+```bash
+wrangler d1 time-travel info <db>                        # show current bookmark
+wrangler d1 time-travel restore <db> --timestamp=<when>  # whole-DB rewind (or --bookmark=<id>)
+```
+
+A restore rewinds **everything** — `d1_migrations` and all post-migration writes included — so it's the fast path when a bad migration is caught immediately, not a surgical tool.
+
+`wrangler d1 export` before each migration is still worth it, for what Time Travel can't do:
+
+- **Surgical restore**: extract only the lost table's INSERTs (runbook step 7) while keeping the new schema and unrelated post-migration writes
+- **Retention beyond the Time Travel window** and off-platform / reviewable copies — see the `cloudflare-d1-weekly-backup-via-pr` skill
 - The export file is a SQL dump with `CREATE TABLE` + `INSERT INTO "<table>"` (note the double-quotes around table name — some greps need to account for that)
 - Exports include the `d1_migrations` tracking table — useful if you need to inspect migration history, but don't re-import it blindly
 - Exports can take several seconds for non-trivial databases. For a 1 MB DB, expect ~5 sec; for 100 MB, a few minutes. Plan accordingly if you're running backup inside a timed window

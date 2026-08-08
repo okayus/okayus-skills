@@ -48,7 +48,7 @@ Three different numbers look alike:
 |---|---|---|
 | **App ID** (~7 digits) | App settings page, "App ID:" on the General tab | `iss` claim of the JWT |
 | **Installation ID** (~9 digits) | the URL after installing: `github.com/settings/installations/<ID>` | `POST /app/installations/<ID>/access_tokens` |
-| Client ID (`Iv23...`) | App settings | not needed for this relay |
+| Client ID (`Iv23...`) | App settings | optional here — GitHub now *recommends* client ID as the JWT `iss` (App ID keeps working; this relay uses App ID) |
 
 Failure signature when they're swapped: `GET /app` with a JWT whose `iss` is the
 installation id returns **404 "Integration not found"** (GitHub resolves `iss`
