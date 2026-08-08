@@ -5,7 +5,7 @@ license: MIT
 compatibility: Designed for Claude Code and similar agents. Host = Linux with systemd user units, node >= 20, git, gh CLI. Sandbox = Docker container with the repo bind-mounted (host and container share one worktree/.git). Repo on GitHub.
 metadata:
   author: okayus
-  version: "0.2.0"
+  version: "0.3.0"
 ---
 
 # Sandboxed-Agent Git Relay (host-side push/PR with a GitHub App)
@@ -62,11 +62,12 @@ to git with zero in-sandbox moving parts.
 ## Relay policy decisions (encoded in relay.mjs)
 
 - **Prefix-only**: scans `refs/heads/claude/` and pushes `refs/heads/X:refs/heads/X` exact refspecs. main is structurally unreachable.
-- **No force, ever**: if the remote branch is not an ancestor of the local tip, log `REFUSE` and skip — divergence is for a human to resolve.
+- **No force, ever**: if the remote branch is not an ancestor of the local tip, log `REFUSE` and skip — divergence is for a human to resolve. ⚠️ **The usual trigger is the agent `--amend`ing or rebasing a commit the relay already pushed** — the rewritten SHA is no longer a descendant of the pushed tip, so every tick `REFUSE`s and the PR is stuck (the relay won't force). **Recover forward, never force**: `git reset --hard <pushed-sha>`, then add a **fast-forward follow-up commit** (`--allow-empty` if it only needs to re-carry a `Relay-Merge: yes` trailer). Don't be lured into amending by a `git log --format='%(trailers:…)'` self-check showing the trailer empty: the relay matches the signal with a **multiline regex on the full body** (`/^Relay-Merge: yes$/m`), so a blank line before it or its position among other trailers is **irrelevant** — git's stricter trailer parser is not what detects it.
 - **Skip when no diff vs `origin/main`** (three-dot diff): empty new branches produce no PR. ⚠️ This three-dot diff does **NOT** detect a squash merge — filtering squash residue is `isTipAlreadyMerged`'s job (see "The squash-merge re-merge loop" below), not this check's.
 - **Token hygiene**: minted per tick only when needed, down-scoped (`repositories: [repo]`, contents+PR write), passed to git via env + an inline credential helper — never argv, never disk. **Prepend `-c credential.helper=`** (empty) first: without that reset, a globally configured `gh` credential helper silently wins and pushes as the *user*, not the App.
 - **Idempotent PR**: `GET /pulls?head=owner:branch` before `POST`; reruns log "PR exists".
 - **Merge only on explicit signal**: see next section. No trailer → the relay never merges; the human does.
+- **No `workflows` permission — on purpose**: the token is `contents`+`pull_requests` only, so GitHub *rejects any push touching `.github/workflows/**`* (`refusing to allow a GitHub App to create or update workflow ... without 'workflows' permission`). This is a feature, not a gap: the agent pipeline **cannot modify its own CI gate** — the same gate that enforces CI-green-before-merge for the `Relay-Merge` path. The relay detects that one rejection and logs `REFUSE <branch>: workflow-file change needs a human push` (returning cleanly, *not* crashing the tick with `exitCode=1` on every run). Land CI changes with a **human-credentialed push** (a user/`gh` token carrying the `workflow` scope): `git push origin claude/<branch>` → next tick the relay sees `remote == local`, skips the push, and opens the PR normally. Grant the App `workflows: write` **only** if you deliberately want agent-authored workflow edits — it hands the autonomous loop the power to weaken its own gate.
 
 ## Optional: agent-initiated merge (the `Relay-Merge: yes` trailer)
 
