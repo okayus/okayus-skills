@@ -9,8 +9,9 @@ services:
   dev:
     environment:
       # No value = resolved from the environment of the `docker compose` process,
-      # i.e. from `op run` in ./up.sh. Unset on the host → "variable is not set"
-      # warning and the key is REMOVED from the container env (fail closed).
+      # i.e. from `op run` in ./up.sh. Unset on the host → the key is REMOVED from
+      # the container env, silently (no compose warning) — fail closed; the startup
+      # NOTE below is the only signal.
       GH_TOKEN:
     volumes:
       - ../okayus-skills/skills:/home/node/.claude/skills:ro   # if you use the skills mount
@@ -46,7 +47,7 @@ Three details:
 - The identity makes sandbox commits distinguishable in `git log` / PR history from your host commits — same convention as the relay's step 7.
 - The `NOTE` line: compose drops an unset valueless key **silently** (verified 2026-08-22), so this echo in `docker compose logs` is the only startup-time sign that `./up.sh` was skipped.
 
-If the quoting fights you (UNVERIFIED: it has not been run through compose), bake a script instead and point the helper at it:
+The one-liner survived compose on mazuoboeru (2026-08-22). If you change its shape and the quoting fights you, bake a script instead and point the helper at it:
 
 ```sh
 # .docker/git-credential-env  (COPY into /usr/local/bin/ in the Dockerfile, chmod 755)

@@ -12,7 +12,7 @@ metadata:
 
 Get the sandbox to the state where **the agent runs `git push origin claude/<topic>` and `gh pr create` itself**, and the only credential inside the container is a GitHub **fine-grained PAT that can reach one repository, cannot touch workflow files, expires, and is resolved from 1Password at `docker compose up`** — never written to disk on the host or in the container.
 
-Written ahead of production, 2026-08-22, as the lighter replacement for [`sandboxed-agent-git-relay`](../sandboxed-agent-git-relay/SKILL.md) (in production on mazuoboeru since 2026-06). Facts about GitHub fine-grained PATs, 1Password CLI and Docker Compose were verified against their docs on 2026-08-22; the wiring itself has not run yet — see *Unverified claims* and write back.
+Written ahead of production, 2026-08-22, as the lighter replacement for [`sandboxed-agent-git-relay`](../sandboxed-agent-git-relay/SKILL.md) (in production on mazuoboeru since 2026-06). Facts about GitHub fine-grained PATs, 1Password CLI and Docker Compose were verified against their docs on 2026-08-22, and the wiring was first applied to mazuoboeru the same day (PR #88) — see *Verified on mazuoboeru* for what held, what surprised, and what is still open.
 
 **The trade in one sentence**: the relay keeps every credential *outside* the boundary and pays for it with moving parts (systemd timer, relay script, GitHub App key, `Relay-Merge` trailer, squash-residue guards); this skill puts a **narrowly scoped** credential *inside* the boundary and pays for it with a residual risk — a compromised sandbox can push to non-protected branches and open / merge PRs that pass CI on that one repo, until you revoke the token.
 
