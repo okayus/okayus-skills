@@ -1,6 +1,6 @@
 ---
 name: sandboxed-agent-github-token-via-1password
-description: Let a sandboxed coding agent (Claude Code in the docker sandbox) push branches and open PRs itself, by injecting a GitHub fine-grained PAT scoped to ONE repository from 1Password at container start (`op run --env-file -- docker compose up`) — the lighter alternative to sandboxed-agent-git-relay (no host timer, no GitHub App) when a repo-scoped, expiring credential inside the boundary is an acceptable trade. Use when the relay feels heavy, when the agent needs `gh pr create` / `gh pr checks` directly, when in-container pushes start failing with `401` after a quiet token expiry, or when `docker compose up` warns that the GH_TOKEN variable is not set. Covers why it must be your own fine-grained PAT (a bot account is out), the permission set (no Workflows), the env-only credential helper, the fail-closed compose passthrough, the allow/deny rules that replace the blanket `git push` deny, the rulesets that stay the real guard, merge policy, rotation, and the service-account variant.
+description: Let a sandboxed coding agent (Claude Code in the docker sandbox) push branches and open PRs itself, by injecting a GitHub fine-grained PAT scoped to ONE repository from 1Password at container start (`op run --env-file -- docker compose up`) — the lighter alternative to sandboxed-agent-git-relay (no host timer, no GitHub App) when a repo-scoped, expiring credential inside the boundary is an acceptable trade. Use when the relay feels heavy, when the agent needs `gh pr create` / `gh pr checks` directly, when in-container pushes start failing with `401` after a quiet token expiry, or when the container's startup log says GH_TOKEN absent and `gh` reports it is not logged in. Covers why it must be your own fine-grained PAT (a bot account is out), the permission set (no Workflows), the env-only credential helper, the fail-closed compose passthrough, the allow/deny rules that replace the blanket `git push` deny, the rulesets that stay the real guard, merge policy, rotation, and the service-account variant.
 license: MIT
 compatibility: Designed for Claude Code and similar agents. Host = Linux/macOS with Docker Compose v2, 1Password CLI (`op`) and a 1Password account; the claude-code-docker-sandbox layout (`.docker/`, `docker-compose.yml` + gitignored override, bind-mounted repo sharing `.git` with the host); the container image already has git + gh. Repo on GitHub owned by you (personal account, or an org you are a member of) — fine-grained PATs can't be used by outside collaborators.
 metadata:
@@ -104,7 +104,7 @@ Human steps once; copy-ready files in the references.
 
 ## The fail-closed property (why `op run` is the only door)
 
-Compose drops a valueless `environment` key that the shell doesn't provide ("If the value is not resolved, the variable is unset and is removed from the service container environment" — verified 2026-08-22). So every way of starting the container *without* going through 1Password — `docker compose up -d` by hand, a restart after `down`, a CI runner — yields a sandbox that can still commit but **cannot push**: `git push` gets `401`, `gh` says it is not logged in. There is no default token, no cached token, no file to fall back to. `docker compose restart` keeps the env of the existing container; `down` + `up` needs `./up.sh` again.
+Compose drops a valueless `environment` key that the shell doesn't provide ("If the value is not resolved, the variable is unset and is removed from the service container environment" — verified 2026-08-22). So every way of starting the container *without* going through 1Password — `docker compose up -d` by hand, a restart after `down`, a CI runner — yields a sandbox that can still commit but **cannot push**: `git push` gets `401`, `gh` says it is not logged in. There is no default token, no cached token, no file to fall back to. Compose drops the key **silently** — no "variable is not set" warning for a valueless key (verified 2026-08-22) — so the startup command echoes `NOTE: GH_TOKEN absent …` into `docker compose logs`, and a push then fails with `remote: Invalid username or token`. `docker compose restart` keeps the env of the existing container; `down` + `up` needs `./up.sh` again.
 
 ## Merge policy (the one decision the relay made for you)
 
@@ -116,7 +116,7 @@ Compose drops a valueless `environment` key that the shell doesn't provide ("If 
 
 | Can | Cannot |
 |---|---|
-| push any commit to any **non-protected** branch of the one repo (incl. overwriting other `claude/*` branches unless the `~ALL` no-force ruleset exists) | push to `main` (ruleset, no bypass), force-push `main`, delete `main` |
+| push any commit to any **non-protected** branch of the one repo (incl. overwriting other `claude/*` branches unless the `~ALL` no-force ruleset exists) | push to `main` (ruleset, no bypass) — **except** the head of an open PR that already satisfies the rules, which GitHub treats as merging that PR (see pitfalls); force-push `main`; delete `main` |
 | open / edit / close PRs and comments, as you | edit `.github/workflows/**` (no `workflows` permission — GitHub rejects the push) |
 | merge a PR whose required checks pass (`contents: write` covers the merge API; the `gh pr merge` deny stops the well-behaved agent, not a malicious dependency) | touch any other repository, gists, packages, org settings |
 | read the one repo (and every public repo) | outlive the expiry, or survive a revoke |
@@ -135,10 +135,10 @@ Runbooks, the relay-migration checklist and the threat model in full: [reference
 
 ## E2E acceptance test
 
-1. `./up.sh` → the container starts; in-container `gh auth status` reports the token from `GH_TOKEN` (env), `echo ${#GH_TOKEN}` prints a length, `git config --global credential.helper` prints the inline helper.
+1. `./up.sh` → the container starts; in-container `gh auth status 2>&1 | grep -c GH_TOKEN` is `1` (don't paste the full output — it prints the token's `github_pat_<id>_` prefix), `echo ${#GH_TOKEN}` prints a length (93 for a fine-grained PAT), `git config --global credential.helper` prints the inline helper with a single `$GH_TOKEN`, and nothing exists at `~/.git-credentials` / `~/.config/gh/hosts.yml`. Drive it from the host with `docker compose exec -T dev zsh -lc '…'` (`sh -lc` lacks the npm-global bin on PATH, so `claude` isn't found there).
 2. In-container: `git switch -c claude/e2e-token`, a doc tweak, commit (author shows the sandbox identity), `git push -u origin claude/e2e-token` → accepted; `gh pr create --fill` → PR URL; `gh pr checks --watch` → CI result.
-3. Negative checks: `git push origin HEAD:main` → rejected by GitHub (ruleset); `gh pr merge` → blocked by the deny rule; a commit touching `.github/workflows/ci.yml` → push rejected for lack of `workflows` permission.
-4. Fail-closed: `docker compose down && docker compose up -d` (no `op run`) → `gh auth status` says not logged in, `git push` → `401`. Then `./up.sh` to restore.
+3. Negative checks: an empty commit on a throwaway branch **with no PR**, then `git push origin HEAD:main` → `GH013 … Changes must be made through a pull request` (pushing the head of an open CI-green PR would instead *merge* it — see pitfalls); a commit touching `.github/workflows/ci.yml` → `! [remote rejected] … refusing to allow a Personal Access Token to create or update workflow … without \`workflow\` scope`; the deny rules under the container's bypass mode via `claude -p "run gh pr merge <n> --help, gh auth status, gh api …"` → each `Permission to use Bash with command … has been denied`, while `gh pr view` runs.
+4. Fail-closed: `docker compose down && docker compose up -d` (no `op run`) → the startup log shows `NOTE: GH_TOKEN absent …`, `gh auth status` says not logged in, a push fails with `Invalid username or token`. Then `./up.sh` to restore — a human step: `op` has no session in an agent's non-interactive shell.
 5. On the host: merge the PR, confirm `delete_branch_on_merge` removed the remote branch; in-container `git fetch --prune`.
 
 ## The pitfalls that eat hours
@@ -146,24 +146,35 @@ Runbooks, the relay-migration checklist and the threat model in full: [reference
 - **`Bash(git push:*)` left in `deny`** → every push blocked no matter what you allow ("a deny rule can't carry allowlist exceptions"). Replace it with the targeted denies.
 - **`git push -u origin claude/x` doesn't match `Bash(git push origin claude/*)`** → the flag sits before `origin`; add the `-u` form (and expect prompts for other flag orders — argument-constraining patterns are documented as fragile; the ruleset is the guard). Note the scope of the allow list: "Allow rules have no effect in `bypassPermissions`" (permission-modes docs), which is the container's default — inside, only the **deny** list acts; the allows matter for host / non-bypass sessions on the same repo.
 - **`$GH_TOKEN` written as `$GH_TOKEN` in `docker-compose.yml`** → compose interpolates it at parse time (empty). Write `$$GH_TOKEN` so the container's shell sees `$GH_TOKEN`.
+- **`git push origin HEAD:main` *succeeded* in the E2E** → that commit was the head of an open PR whose checks had just passed, and GitHub treats such a push as merging that PR (fast-forward; the PR flips to *merged*). The `pull_request` rule was satisfied, not bypassed. Consequences: test the guard with a commit that has **no** PR, and deny the refspec forms too (`git push *main`, `git push *main *`) — `gh pr merge` is not the only merge path.
 - **Reading CI with `gh api …/check-runs`** → `gh api` is denied by the template (the merge endpoint is one `PUT` away), and even where allowed, fine-grained PATs can't call the Checks REST API. Read CI with `gh pr checks` (GraphQL), or the relay's unauthenticated `curl` on a public repo.
-- **"GH_TOKEN variable is not set" warning on `docker compose up`** → you skipped `./up.sh`; by design the container is tokenless now.
+- **`NOTE: GH_TOKEN absent` in `docker compose logs`** → you skipped `./up.sh`; by design the container is tokenless now (compose itself prints no warning for an unset valueless key).
 - **Pushes start failing with 401 one morning** → the token expired; 1Password `expires` first, GitHub second.
 - **`gh auth setup-git` inside the container** → adds gh as a credential helper too; harmless with `GH_TOKEN`, but it's one more path — keep the inline helper as the only one.
 - **Token in a remote URL** → `git remote set-url` with `https://x-access-token:<token>@…` lands in `.git/config`, which the host shares and `git remote -v` prints. Never.
 - **Leftover local `claude/*` branches** → no relay reaps them; `git fetch --prune` after merges, and `delete_branch_on_merge=true` on the repo.
 - **Assuming the `~ALL` no-force ruleset blocks squash merges** → it doesn't (a merge is a fast-forward of `main`); it only blocks rewriting pushed branches.
 
-## Unverified claims — confirm while implementing, then write back
+## Verified on mazuoboeru (2026-08-22, first application) — and what is still open
 
-- UNVERIFIED: the inline credential helper survives compose's quoting (`sh -c "… '!f() { echo username=x-access-token; echo \"password=$$GH_TOKEN\"; }; f' …"`) — if not, bake `/usr/local/bin/git-credential-env` into the image (script in the wiring reference) and point `credential.helper` at it.
-- UNVERIFIED: `docker compose up -d` under `op run` leaves the token in the running container after `op run` exits (it should — env is fixed at container creation), and a changed token value makes `up -d` recreate the container.
-- UNVERIFIED: `gh pr checks` / `gh pr view` / `gh pr create` all work with a fine-grained PAT holding only Contents + Pull requests (+ Metadata) — GraphQL is not on GitHub's unsupported list, the Checks REST API is.
-- UNVERIFIED: the `API Credential` category's field is named `credential` for `op read` / `op item create` — confirm with `op item get <item> --format json`.
-- UNVERIFIED: Claude Code matches `Bash(git push origin claude/*)` against `git push origin claude/x` and also against a refspec like `claude/x:refs/heads/main` (the ruleset, not the rule, must stop the latter) — record the observed prompts.
-- UNVERIFIED: 1Password desktop-app integration on this Ubuntu host ("Unlock using system authentication") makes `op run` prompt-free; otherwise the `eval $(op signin)` session workflow applies.
-- UNVERIFIED: the exact `remote rejected` line GitHub prints when a fine-grained PAT without the `workflows` permission pushes a `.github/workflows/**` change (the classic-PAT wording says `without workflow scope`; the fine-grained one may name the permission) — capture it in E2E step 3 and put it in the setup reference.
+Confirmed on the real setup (okayus/mazuoboeru, PR #88):
+
+- The inline credential helper survives compose's quoting: `git config --global credential.helper` inside the container prints a single `$GH_TOKEN`. `docker compose config` shows `$$GH_TOKEN` — that is the output re-escaping `$`, not a bug.
+- A valueless `GH_TOKEN:` is dropped **silently** when unset (no compose warning); the `NOTE: GH_TOKEN absent …` echo in the startup command is the only startup-time signal besides `gh auth status`.
+- `gh pr create`, `gh pr view`, `gh pr checks` all work with a fine-grained PAT holding Contents + Pull requests (+ Metadata); the PR author is the token owner.
+- Workflow-file push rejection, verbatim: `! [remote rejected] claude/e2e-token -> claude/e2e-token (refusing to allow a Personal Access Token to create or update workflow \`.github/workflows/ci.yml\` without \`workflow\` scope)` — the same wording as for classic PATs.
+- Deny rules act under the container's `bypassPermissions` default: `gh pr merge <n> --help`, `gh auth status`, `gh api …` → `Permission to use Bash with command … has been denied`; `gh pr view` runs. Probed with `claude -p` from the host via `docker compose exec -T dev zsh -lc`.
+- The `API Credential` item's field is `credential` — `op://<vault>/<item>/credential` resolved.
+- A commit with no PR pushed to `main` → `GH013 … Changes must be made through a pull request. … Required status check "ci" is expected.` The head of an open, CI-green PR pushed to `main` **succeeds and merges that PR** (pitfalls) — the E2E's negative test must use a PR-less commit.
+- `gh auth status` prints the `github_pat_<id>_` prefix of the token (the id part, not the secret) — keep it out of transcripts anyway.
+- The passthrough key can live in the committed `docker-compose.yml` instead of the override (mazuoboeru does): it is not a secret and is inert when unset; only `.docker/sandbox.env` is host-specific.
+
+Still open — confirm and write back:
+
+- UNVERIFIED: a changed token value makes `./up.sh` (`docker compose up -d`) recreate the container; `down`/`up` recreation is confirmed, value-change recreation is not (fallback: `./up.sh --force-recreate`).
+- UNVERIFIED: 1Password desktop-app integration makes `./up.sh` prompt-free on Linux; the first application unlocked interactively.
 - UNVERIFIED: the in-container service-account variant — the 1Password domains the egress firewall needs and the per-push request budget (the support page listing domains returned 403 to the fetch on 2026-08-22). See [references/service-account-variant.md](references/service-account-variant.md).
+- UNVERIFIED: Claude Code's match of `Bash(git push *main)` / `Bash(git push *main *)` against the refspec forms (`HEAD:main`, `HEAD:refs/heads/main`) — added after the E2E, not yet probed with `claude -p`.
 
 ## Scope boundary — what this skill does NOT cover
 

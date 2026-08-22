@@ -4,6 +4,8 @@
 
 **`main`**: use the JSON in `cloudflare-workers-builds-keyless-deploy/references/ruleset.md` verbatim — `deletion` + `non_fast_forward` + `pull_request` (0 required reviews) + `required_status_checks` (`ci`, pinned to the GitHub Actions app) + **`bypass_actors: []`**. The last item is what makes a token minted on *your* account unable to push `main`: a fine-grained PAT "has the same capabilities … that the owner of the token has", so any bypass you grant yourself is the token's too. Enforcement is free on public repos; on a private repo it needs Pro / Team (the keyless skill's plan note).
 
+Verify what is actually enforced: `gh api repos/<owner>/<repo>/rulesets` → `…/rulesets/<id>`; `rules[].type` must include `pull_request`, `required_status_checks` and `non_fast_forward`, `bypass_actors` must be `[]`. A `GH013` rejection lists **every** violated rule, so a message naming only the status check is not proof that the PR rule exists — and a push of an open, rule-satisfying PR's head is *accepted* as that PR's merge (mazuoboeru, 2026-08-22).
+
 **Optional — no force push anywhere** (`~ALL`): stops a compromised sandbox from rewriting *other* pushed branches (a human's WIP branch, another agent's PR). Merges and branch deletions stay allowed.
 
 ```bash
@@ -25,7 +27,7 @@ Companion: `gh api -X PATCH repos/<owner>/<repo> -f delete_branch_on_merge=true`
 
 | Policy | Settings | Guarantee |
 |---|---|---|
-| **Human merges** (default) | `deny: Bash(gh pr merge *)`, `deny: Bash(gh api *)` | the well-behaved agent stops at "PR open, CI green"; a *compromised* sandbox could still merge via the API — see threat model |
+| **Human merges** (default) | `deny: Bash(gh pr merge *)`, `deny: Bash(gh api *)` | the well-behaved agent stops at "PR open, CI green"; a *compromised* sandbox could still merge via the API, or by pushing the PR head to `main` — see threat model |
 | **Agent may request a merge** | `allow: Bash(gh pr merge --auto --squash *)`; repo setting *Allow auto-merge* on | `--auto` merges only after the ruleset's required checks pass; the request is visible in the PR timeline — the `Relay-Merge: yes` semantics without the relay |
 | Required review | `required_approving_review_count: 1` | **don't** on a solo repo: the token is you, you can't approve your own PR, nobody can merge |
 
@@ -34,7 +36,7 @@ Companion: `gh api -X PATCH repos/<owner>/<repo> -f delete_branch_on_merge=true`
 | Capability of a compromised sandbox | relay | this skill | mitigation here |
 |---|---|---|---|
 | Push to non-protected branches | only `claude/*`, never force (relay policy) | any branch, force unless the `~ALL` ruleset | `~ALL` `non_fast_forward`; branch hygiene |
-| Push to `main` | impossible (no credential) | rejected by the ruleset | `bypass_actors: []` |
+| Push to `main` | impossible (no credential) | rejected by the ruleset — **unless** the pushed commit is the head of an open PR that already satisfies the rules; then the push *is* the merge (verified 2026-08-22) | `bypass_actors: []`; deny the refspec forms (`git push *main`) |
 | Open PRs | relay does, for `claude/*` | yes, as you | review before merge |
 | Merge a CI-green PR | only with the trailer, by the relay | **yes** (`contents: write` covers the merge API; the `gh pr merge` / `gh api` denies bind only the cooperative agent) | strong required checks; short expiry; revoke on suspicion; if unacceptable → keep the relay |
 | Edit workflow files | rejected (App lacks `workflows`) | rejected (token lacks `workflows`) | — |

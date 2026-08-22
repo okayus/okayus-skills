@@ -31,6 +31,7 @@ Add to the `command:` chain of the committed compose file (before `exec sleep in
               git config --global user.name 'Claude (<project> sandbox)' &&
               git config --global user.email 'claude-sandbox@users.noreply.github.com' ||
               echo 'WARN: git credential/identity setup failed') &&
+             ([ -n \"$$GH_TOKEN\" ] || echo 'NOTE: GH_TOKEN absent - this container can commit but NOT push. Start it via ./up.sh') &&
              ([ -s /home/node/.claude/settings.json ] || echo '{}' > /home/node/.claude/settings.json) &&
              (jq '.permissions.defaultMode = \"bypassPermissions\"' /home/node/.claude/settings.json > /tmp/cs.json &&
               mv /tmp/cs.json /home/node/.claude/settings.json ||
@@ -43,6 +44,7 @@ Three details:
 - **`$$GH_TOKEN`**, not `$GH_TOKEN`: compose interpolates `$VAR` in the YAML at parse time; `$$` yields a literal `$` so the *container's* shell expands it when git calls the helper.
 - The helper is the relay's (`relay.mjs`: `credential.helper=!f() { echo username=x-access-token; echo "password=$GIT_RELAY_TOKEN"; }; f`) with the env var renamed. `x-access-token` is accepted as the username for token auth over HTTPS; the token is the password. Nothing is written under `~/.git-credentials`, and `~/.gitconfig` lives in the container layer (re-created each start), not in a named volume.
 - The identity makes sandbox commits distinguishable in `git log` / PR history from your host commits — same convention as the relay's step 7.
+- The `NOTE` line: compose drops an unset valueless key **silently** (verified 2026-08-22), so this echo in `docker compose logs` is the only startup-time sign that `./up.sh` was skipped.
 
 If the quoting fights you (UNVERIFIED: it has not been run through compose), bake a script instead and point the helper at it:
 
@@ -92,7 +94,8 @@ Starting from the `cloudflare-mcp-claude-tooling` template:
       "Bash(git push * --force*)",
       "Bash(git push --force*)",
       "Bash(git push -f *)",
-      "Bash(git push * main)",
+      "Bash(git push *main)",          // ends in main: `origin main`, `HEAD:main`, `HEAD:refs/heads/main`
+      "Bash(git push *main *)",        // same with trailing flags
       "Bash(git push * --delete *)",
       "Bash(gh pr merge *)",          // drop this line (and add the --auto form to allow) for opt-in agent merges
       "Bash(gh auth *)",              // no `gh auth login` (stores a token), no `gh auth token` (prints it)
@@ -103,7 +106,7 @@ Starting from the `cloudflare-mcp-claude-tooling` template:
 }
 ```
 
-Rules to keep in mind (Claude Code permissions docs, 2026-08-22): a deny rule matches regardless of a narrower allow; `*` spans spaces, so `Bash(git push origin claude/*)` also matches `git push origin claude/x:main` — **the ruleset rejects that push, the rule doesn't**; patterns constraining arguments are documented as fragile; deny rules still apply in `bypassPermissions` mode while **allow rules have no effect there** (permission-modes docs) — so inside the container (bypass by default) only the `deny` list acts, and the `allow` list is for host / non-bypass sessions on the same repo. Treat this list as keeping the well-behaved agent on the rails, nothing more.
+Rules to keep in mind (Claude Code permissions docs, 2026-08-22): a deny rule matches regardless of a narrower allow; `*` spans spaces, so `Bash(git push origin claude/*)` also matches `git push origin claude/x:main` — **the ruleset rejects that push, the rule doesn't**; patterns constraining arguments are documented as fragile; deny rules still apply in `bypassPermissions` mode while **allow rules have no effect there** (permission-modes docs) — so inside the container (bypass by default) only the `deny` list acts, and the `allow` list is for host / non-bypass sessions on the same repo. Pushing the head of an open, rule-satisfying PR to `main` is *allowed* by GitHub — it is the merge (verified 2026-08-22) — which is why the refspec forms are denied here too. Treat this list as keeping the well-behaved agent on the rails, nothing more.
 
 Opt-in agent merge: replace the `gh pr merge` deny with `"Bash(gh pr merge --auto --squash *)"` in `allow` and enable *Allow auto-merge* on the repo (see `rulesets-and-policy.md`).
 
@@ -114,11 +117,13 @@ Opt-in agent merge: replace the `gh pr merge` deny with `"Bash(gh pr merge --aut
 ## In-container verification
 
 ```sh
-gh auth status                                  # → Logged in … Token: GH_TOKEN env
+gh auth status 2>&1 | grep -c GH_TOKEN          # → 1 (the full output prints the token's id prefix — keep it out of transcripts)
 echo "${#GH_TOKEN}"                             # a length, never the value
 git config --global credential.helper           # the inline helper
 git ls-remote --heads origin | head -3          # read works
 git switch -c claude/e2e-token && git commit --allow-empty -m "chore: e2e token push" && git push -u origin claude/e2e-token
 gh pr create --fill && gh pr checks --watch
-git push origin HEAD:main                       # → rejected by the ruleset (expected)
+# negative: a commit with NO open PR — the head of an open CI-green PR would MERGE instead of being rejected
+git switch -c claude/e2e-nopr && git commit --allow-empty -m "e2e: no PR" && git push origin HEAD:main   # → GH013 … Changes must be made through a pull request
+# from the host: docker compose exec -T dev zsh -lc '…'  (sh -lc lacks the npm-global bin, so `claude` isn't on PATH there)
 ```

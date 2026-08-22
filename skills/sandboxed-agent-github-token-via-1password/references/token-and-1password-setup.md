@@ -13,7 +13,7 @@ Settings → Developer settings → Personal access tokens → **Fine-grained to
 | Expiration | **90 days** | GitHub allows infinite lifetimes; don't. The date goes into the 1Password item and your calendar |
 | Repository access | **Only select repositories** → the one repo | "All repositories" turns a sandbox compromise into an account compromise |
 | Repository permissions | **Contents: Read and write** (push, branches, merges) · **Pull requests: Read and write** (open / edit PRs) · *Metadata: Read* (added automatically) · optional **Actions: Read** (`gh run view`) | the minimum for push + PR |
-| — | **Workflows: none** | the agent must not be able to edit `.github/workflows/**`; GitHub rejects such pushes at the remote (`refusing to allow a Personal Access Token to create or update workflow …` — record the exact fine-grained wording from E2E step 3 here; the classic-PAT message ends in `without workflow scope`) — the same deliberate gap the relay keeps |
+| — | **Workflows: none** | the agent must not be able to edit `.github/workflows/**`; GitHub rejects such pushes at the remote: `! [remote rejected] … (refusing to allow a Personal Access Token to create or update workflow \`.github/workflows/ci.yml\` without \`workflow\` scope)` (verified 2026-08-22 — same wording as for classic PATs) — the same deliberate gap the relay keeps |
 
 Notes:
 
