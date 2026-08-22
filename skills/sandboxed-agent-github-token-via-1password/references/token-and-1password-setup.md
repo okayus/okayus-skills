@@ -55,6 +55,7 @@ op item create --category "API Credential" --vault "<vault>" \
   'notesPlain=repo <owner>/<repo>; Contents + Pull requests write; no Workflows; used by ./up.sh'
 ```
 
+- **One item title per repository** (`github-pat-<repo>-sandbox`). Reusing a title for a second project makes `op read "op://<vault>/<title>/credential"` ambiguous and can inject the *other* project's token — it happened when a second project's `op item create` was copy-pasted with the old `--title`. Before the first `./up.sh`: `op item list --vault <vault> | grep github-pat-`.
 - Prefer a dedicated vault (e.g. `Sandbox`) over your Private vault: it keeps the service-account variant possible later (service accounts can't read Private vaults) and makes "what can the sandbox reach" a one-vault question.
 - Confirm the field name before wiring anything: `op item get "github-pat-<repo>-sandbox" --format json | jq '.fields[] | {id,label,type}'` — the reference below assumes the API Credential category names it `credential` (UNVERIFIED until you look).
 - Smoke: `op read "op://<vault>/github-pat-<repo>-sandbox/credential" | wc -c` → a length, not the token, in your terminal.
