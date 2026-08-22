@@ -1,11 +1,11 @@
 ---
 name: cloudflare-mcp-claude-tooling
-description: Wire up the Claude Code project tooling for a Cloudflare Workers project developed inside the docker sandbox — a docs-only Cloudflare MCP, a committed `.claude/settings.json` permission allowlist that denies `git commit`/`push` as an execution-level guard for the "git on the host" rule, the egress-firewall domains the docs MCP needs, and the `grill-with-docs` design step. Use when starting a new Cloudflare project (after the sandbox is up) and you want Claude Code's MCP + permissions + design scaffolding set up deliberately. Covers WHY you take docs-only and route account operations through wrangler instead of the bindings/builds/observability MCP servers (OAuth callback is fragile in a container; they overlap with wrangler anyway).
+description: Wire up the Claude Code project tooling for a Cloudflare Workers project developed inside the docker sandbox — a docs-only Cloudflare MCP, a committed `.claude/settings.json` permission allowlist that denies `git commit`/`push` as an execution-level guard for the "git on the host" rule, the egress-firewall domains the docs MCP needs, and the `grill-with-docs` design step. Use when starting a new Cloudflare project (after the sandbox is up) and you want Claude Code's MCP + permissions + design scaffolding set up deliberately. Covers WHY you take docs-only and route account operations through wrangler instead of the bindings/builds/observability MCP servers (OAuth callback is fragile in a container; they overlap with wrangler anyway), plus the documentation-access recipe for the firewalled agent (server-side WebSearch, per-host OPTIONAL egress for WebFetch, which sites publish `llms.txt`, the Context7 MCP with MDN, Modern Web Guidance at project scope).
 license: MIT
 compatibility: Designed for Claude Code. Assumes a project already running in the claude-code-docker-sandbox (egress firewall + bind mount). Pairs with cloudflare-workers-deploy-skeleton for the deploy pipeline. wrangler + an OAuth-authenticated Claude Code in the container.
 metadata:
   author: okayus
-  version: "0.1.0"
+  version: "0.2.0"
 ---
 
 # Cloudflare MCP + Claude Code project tooling
@@ -85,6 +85,30 @@ mkdir -p <project>/.claude/skills/grill-with-docs
 ```
 
 Then run `/grill-with-docs` and let it interview you one question at a time, capturing vocabulary in `CONTEXT.md` and hard-to-reverse decisions in `docs/adr/NNNN-*.md`. Good first targets: auth method, public/private model, scoring/grading rules — the choices that are expensive to change after code exists.
+
+## Giving the sandboxed agent documentation access
+
+The firewall is default-deny, so "look it up in the docs" needs a plan. Three layers, verified on kokemusu 2026-08-22:
+
+| Layer | Mechanism | Egress needed |
+|---|---|---|
+| **WebSearch** | runs on Anthropic's backend (`api.anthropic.com`, already fatal-allowlisted); returns titles + URLs only | none |
+| **WebFetch** | fetched by the Claude Code process *in the container* | the docs host — add it to the firewall's **OPTIONAL** list (a resolve failure must not kill the container) and, for host sessions, a `WebFetch(domain:…)` allow rule |
+| **MCP** | `cloudflare-docs` (no auth) + **Context7** (`https://mcp.context7.com/mcp`, key optional; indexes MDN — `mdn/content`, ~9 M tokens — plus Hono, Drizzle, React, Vite, Cloudflare Workers) | `docs.mcp.cloudflare.com`, `mcp.context7.com` |
+
+Which sites speak `llms.txt` (probed 2026-08-22): **yes** — `hono.dev` (+ `llms-full.txt`), `orm.drizzle.team` (+ full), `react.dev`, `vite.dev`, `vitest.dev`, `zod.dev`, `swr.vercel.app`, `developers.cloudflare.com`, `developer.chrome.com/docs/css-ui/`; **no** — MDN, typescriptlang.org, tailwindcss.com, web.dev, playwright.dev (use Context7 or fetch the page). Tell the agent the order in `CLAUDE.md`: Context7 / cloudflare-docs → `llms.txt` index then the page (`llms-full.txt` last, it is huge) → WebSearch, then WebFetch only inside the allowlist.
+
+`.mcp.json` with both servers (project MCP servers still need the one-time interactive trust approval; `claude mcp list` shows `⏸ Pending approval` until then — after it, `✔ Connected`, and an in-container `claude -p` resolved `/mdn/content` via Context7 and answered a `<dialog closedby>` question correctly):
+
+```json
+{ "mcpServers": {
+    "cloudflare-docs": { "type": "http", "url": "https://docs.mcp.cloudflare.com/mcp" },
+    "context7":        { "type": "http", "url": "https://mcp.context7.com/mcp" } } }
+```
+
+OPTIONAL-list entries that worked: `mcp.context7.com developer.mozilla.org react.dev hono.dev orm.drizzle.team vite.dev vitest.dev zod.dev developer.chrome.com web.dev`. Two caveats: the allowlist is **IP-based**, so the shared anycast IPs admit sibling sites (hono/drizzle/zod = Cloudflare, react.dev = Vercel, MDN = Fastly, chrome = Google) — acceptable for read-only docs, and why `context7.com` (the website) stays blocked while `mcp.context7.com` is open; and `mcp.context7.com` is an AWS ELB whose IPs can rotate — the firewall resolves at container start, so if Context7 stops answering, restart the container.
+
+**Modern Web Guidance** (Google Chrome, Apache-2.0 — "use the platform, don't reinvent `<dialog>` / popover / anchor positioning / container queries in React"): install at project scope so it rides the bind mount and is reviewable — `npx skills add GoogleChrome/modern-web-guidance@modern-web-guidance -a claude-code -y` → `.claude/skills/modern-web-guidance/` (SKILL.md + ~140 guides, 1.3 MB) + `skills-lock.json`; update with `npx skills update`. Its `search` / `retrieve` run `npx -y modern-web-guidance@latest …` — the npm registry is already fatal-allowlisted, so it works in the sandbox (first call downloads the package; no call to Google at runtime). The Claude Code plugin route (`/plugin marketplace add GoogleChrome/modern-web-guidance`) lands in `~/.claude/plugins` instead — not visible through the skills mount.
 
 ## Verify
 

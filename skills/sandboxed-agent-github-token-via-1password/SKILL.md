@@ -5,7 +5,7 @@ license: MIT
 compatibility: Designed for Claude Code and similar agents. Host = Linux/macOS with Docker Compose v2, 1Password CLI (`op`) and a 1Password account; the claude-code-docker-sandbox layout (`.docker/`, `docker-compose.yml` + gitignored override, bind-mounted repo sharing `.git` with the host); the container image already has git + gh. Repo on GitHub owned by you (personal account, or an org you are a member of) — fine-grained PATs can't be used by outside collaborators.
 metadata:
   author: okayus
-  version: "0.1.0"
+  version: "0.1.1"
 ---
 
 # Sandboxed-agent GitHub token via 1Password (repo-scoped PAT, injected at start)
@@ -149,6 +149,9 @@ Runbooks, the relay-migration checklist and the threat model in full: [reference
 - **`git push origin HEAD:main` *succeeded* in the E2E** → that commit was the head of an open PR whose checks had just passed, and GitHub treats such a push as merging that PR (fast-forward; the PR flips to *merged*). The `pull_request` rule was satisfied, not bypassed. Consequences: test the guard with a commit that has **no** PR, and deny the refspec forms too (`git push *main`, `git push *main *`) — `gh pr merge` is not the only merge path.
 - **Reading CI with `gh api …/check-runs`** → `gh api` is denied by the template (the merge endpoint is one `PUT` away), and even where allowed, fine-grained PATs can't call the Checks REST API. Read CI with `gh pr checks` (GraphQL), or the relay's unauthenticated `curl` on a public repo.
 - **`NOTE: GH_TOKEN absent` in `docker compose logs`** → you skipped `./up.sh`; by design the container is tokenless now (compose itself prints no warning for an unset valueless key).
+- **Two projects, one 1Password item title** → a copy-pasted `op item create … --title github-pat-<other-repo>-sandbox` silently creates a *second* item with the other project's name; `op read` then fails (`could not find item …`) for the new project and becomes ambiguous for the old one — the wrong repo's token can end up in a container. One title per repository, and `op item list --vault <vault> | grep github-pat-` before the first `./up.sh` (kokemusu, 2026-08-22).
+- **`gh pr create` → `No commits between main and <branch>`** → the E2E branch needs at least one commit beyond `main` (`git commit --allow-empty` is enough).
+- **`claude -p` in the container fails with `OAuth session expired and could not be refreshed`** → the `claude-config` named volume kept a login from weeks ago; re-login interactively once (`docker compose exec dev claude`), then the deny probes run. Unrelated to the token.
 - **Pushes start failing with 401 one morning** → the token expired; 1Password `expires` first, GitHub second.
 - **`gh auth setup-git` inside the container** → adds gh as a credential helper too; harmless with `GH_TOKEN`, but it's one more path — keep the inline helper as the only one.
 - **Token in a remote URL** → `git remote set-url` with `https://x-access-token:<token>@…` lands in `.git/config`, which the host shares and `git remote -v` prints. Never.
@@ -168,13 +171,14 @@ Confirmed on the real setup (okayus/mazuoboeru, PR #88):
 - A commit with no PR pushed to `main` → `GH013 … Changes must be made through a pull request. … Required status check "ci" is expected.` The head of an open, CI-green PR pushed to `main` **succeeds and merges that PR** (pitfalls) — the E2E's negative test must use a PR-less commit.
 - `gh auth status` prints the `github_pat_<id>_` prefix of the token (the id part, not the secret) — keep it out of transcripts anyway.
 - The passthrough key can live in the committed `docker-compose.yml` instead of the override (mazuoboeru does): it is not a secret and is inert when unset; only `.docker/sandbox.env` is host-specific.
+- Without the desktop-app integration, `eval $(op signin)` in the same terminal (30-minute session) followed by `./up.sh` is the working loop on Linux; the integration itself has not been tried (both applications unlocked this way).
+- `Bash(git push *main)` blocks the refspec form: under bypass mode `claude -p` reported `git push origin HEAD:main` → `Permission … has been denied` (kokemusu, 2026-08-22); `HEAD:refs/heads/main` ends in `main` too and matches the same rule.
+- Second application, kokemusu (2026-08-22, a fresh public repo wired from the skill in one pass): identical results for push / PR / checks, the PR-less `main` push, the workflow rejection and the egress split; see pitfalls for the item-title collision and the `No commits between` and OAuth-expiry surprises.
 
 Still open — confirm and write back:
 
 - UNVERIFIED: a changed token value makes `./up.sh` (`docker compose up -d`) recreate the container; `down`/`up` recreation is confirmed, value-change recreation is not (fallback: `./up.sh --force-recreate`).
-- UNVERIFIED: 1Password desktop-app integration makes `./up.sh` prompt-free on Linux; the first application unlocked interactively.
 - UNVERIFIED: the in-container service-account variant — the 1Password domains the egress firewall needs and the per-push request budget (the support page listing domains returned 403 to the fetch on 2026-08-22). See [references/service-account-variant.md](references/service-account-variant.md).
-- UNVERIFIED: Claude Code's match of `Bash(git push *main)` / `Bash(git push *main *)` against the refspec forms (`HEAD:main`, `HEAD:refs/heads/main`) — added after the E2E, not yet probed with `claude -p`.
 
 ## Scope boundary — what this skill does NOT cover
 
