@@ -86,6 +86,14 @@ docker compose down && docker compose build && docker compose up -d
    self-heal** via `playwright install` — it surfaces as `browser not found` (or a
    protocol-version mismatch) until you bump **both** and rebuild the image. Treat a
    version bump as: edit both, `docker compose build`, run e2e once.
+   Not every pin installs on every base image: `playwright@1.59.1 install chromium`
+   **hangs forever after the download on `node:24`** (the `pw:install` log ends at
+   `SUCCESS downloading …`, the extraction never finishes; `node:22` + 1.59.1 and
+   `node:24` + 1.62.1 both complete in ~2 minutes — verified 2026-08-22 in matatabetai).
+   When the build sits at `100% of … MiB` with no `#N DONE`, reproduce outside the
+   build — `docker run --rm -e DEBUG=pw:install node:24 sh -c 'npx -y playwright@<ver>
+   install chromium'` — and move the pin (and `@playwright/test`) to a version that
+   completes, rather than retrying the build or suspecting the CDN.
 
 5. **`--no-sandbox`, gated on the devcontainer.** The container has `NET_ADMIN`/`NET_RAW`
    (for the firewall) but **not** `SYS_ADMIN` / user-namespace cloning, so Chromium's
