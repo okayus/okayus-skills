@@ -1,20 +1,20 @@
 ---
 name: claude-code-docker-sandbox
-description: Set up a Docker Compose-isolated development environment where dependency installs and agent-run code execute behind a default-deny network firewall, never touching the host. Use when you want to run `npm install` / `cargo build` / `cabal build`, untrusted dependencies, or Claude Code itself in a container to contain supply-chain attacks (npm postinstall, Rust build.rs, Haskell Setup.hs) — without depending on VS Code. Reuses Anthropic's published devcontainer Dockerfile + init-firewall.sh, driven by a plain docker-compose.yml so any host editor works via bind mount; Rust/Haskell toolchains are opt-in build args on the node:20 base. Covers the egress allowlist (fatal vs OPTIONAL non-fatal domains), build-time-vs-runtime network, keeping Claude Code current inside the firewall (native updater's host is blocked — update via npm at start), why the /model picker hides flag-gated models until DISABLE_TELEMETRY is unset, bypassPermissions-by-default (container-scope, not repo-shared), and host-side git hygiene.
+description: Set up a Docker Compose-isolated development environment where dependency installs and agent-run code execute behind a default-deny network firewall, never touching the host. Use when you want to run `npm install` / `cargo build` / `cabal build` / `go build`, untrusted dependencies, or Claude Code itself in a container to contain supply-chain attacks — without depending on VS Code. Reuses Anthropic's published devcontainer Dockerfile + init-firewall.sh, driven by a plain docker-compose.yml so any host editor works via bind mount; Rust/Haskell/Go toolchains are opt-in build args on the node:24 (LTS) base. Covers the egress allowlist (fatal vs OPTIONAL non-fatal domains), build-time-vs-runtime network, keeping Claude Code current inside the firewall (native updater's host is blocked — update via npm at start), why the /model picker hides flag-gated models until DISABLE_TELEMETRY is unset, bypassPermissions-by-default (container-scope, not repo-shared), and host-side git hygiene.
 license: MIT
-compatibility: Designed for Claude Code and similar agents. Targets Linux/macOS hosts with Docker + Docker Compose v2. Container is node:20 base, non-root `node` user, iptables/ipset egress firewall (needs NET_ADMIN + NET_RAW). Host editor + git stay outside the container; only npm/build/agent execution is isolated.
+compatibility: Designed for Claude Code and similar agents. Targets Linux/macOS hosts with Docker + Docker Compose v2. Container is node:24 (LTS) base, non-root `node` user, iptables/ipset egress firewall (needs NET_ADMIN + NET_RAW). Host editor + git stay outside the container; only npm/build/agent execution is isolated.
 metadata:
   author: okayus
-  version: "0.3.0"
+  version: "0.5.0"
 ---
 
 # Claude Code Docker Sandbox
 
 Get a Node/JS project to the state where **`npm install`, build tools, and Claude Code all run inside a container behind a default-deny iptables firewall**, while you edit files from your normal host editor and run `git` on the host.
 
-**Why do this**: supply-chain attacks execute arbitrary code at dependency-install/build time and at run time — npm `postinstall` scripts, Rust `build.rs`, Haskell custom `Setup.hs` are all the same class of hole. A naked `npm install` / `cargo build` / `cabal build` on the host can read `~/.ssh`, `~/.aws/credentials`, exfiltrate over the network, or backdoor your shell rc files. This skill confines all of that to a container whose only network egress is an explicit allowlist (the package registry, GitHub, your model API, your deploy target) — everything else is rejected at the OS level.
+**Why do this**: supply-chain attacks execute arbitrary code at dependency-install/build time and at run time — npm `postinstall` scripts, Rust `build.rs`, Haskell custom `Setup.hs`, Go `go generate` / malicious module code in tests are all the same class of hole. A naked `npm install` / `cargo build` / `cabal build` / `go build` on the host can read `~/.ssh`, `~/.aws/credentials`, exfiltrate over the network, or backdoor your shell rc files. This skill confines all of that to a container whose only network egress is an explicit allowlist (the package registry, GitHub, your model API, your deploy target) — everything else is rejected at the OS level.
 
-**Languages**: the base image is `node:20` because Claude Code itself is an npm package and needs a Node runtime even in a Rust- or Haskell-only project. Rust (rustup) and Haskell (GHCup) are **opt-in `--build-arg` layers** on top — see [Language toolchains](#language-toolchains-rust--haskell).
+**Languages**: the base image is `node:24` (current Node LTS) because Claude Code itself is an npm package and needs a Node runtime even in a Rust-, Haskell-, or Go-only project. It must be a **Node ≥ 22** line: `@anthropic-ai/claude-code@latest` now declares `engines.node >=22`, so an older base like `node:20` installs with an `EBADENGINE` warning and the in-container agent misbehaves — pin the base to the current LTS and bump the major as new LTS lines land. Rust (rustup), Haskell (GHCup), and Go (official tarball) are **opt-in `--build-arg` layers** on top — see [Language toolchains](#language-toolchains-rust--haskell--go).
 
 This is the **non-VS-Code** path. Anthropic's official `.devcontainer/` reference assumes a VS Code / Dev Containers spec editor. Here the same hardened `Dockerfile` + `init-firewall.sh` are driven by a plain `docker-compose.yml`, so the workflow is `docker compose exec dev zsh` + any host editor.
 
@@ -37,7 +37,7 @@ Do **not** use this when: you need the full VS Code Dev Containers UX (use the o
 
 You're done when:
 
-1. `docker compose up -d` starts the container and the logs end with `Firewall verification passed - unable to reach https://example.com as expected` followed by `... able to reach https://api.github.com as expected`.
+1. `docker compose up -d` starts the container and the logs contain `Firewall verification passed - unable to reach https://example.com as expected` followed by `... able to reach https://api.github.com as expected` (they won't be the *last* lines — the startup `npm i -g` / tooling output comes after).
 2. `docker compose exec dev sh -c 'curl --connect-timeout 5 -s -o /dev/null -w "%{http_code}" https://example.com'` prints `000` (blocked), and the same against `https://registry.npmjs.org` prints `200`.
 3. `docker compose exec dev zsh` drops you into `/workspace` as the non-root `node` user, and your project files are visible there (bind mount works).
 4. Inside the container, `claude` authenticates successfully and `/status` shows the model — and survives `docker compose down && docker compose up -d` (auth persisted in the `claude-config` volume).
@@ -47,11 +47,11 @@ You're done when:
 
 Copy the three template files into your repo, then build and verify. Full commented copies are in `references/`.
 
-1. **`.docker/Dockerfile`** — copy [references/Dockerfile](references/Dockerfile) verbatim. It is Anthropic's published devcontainer image: `node:20`, non-root `node` user, dev tools, `git-delta`, zsh+powerlevel10k, `@anthropic-ai/claude-code` installed globally, and a passwordless-sudo rule scoped to *only* `init-firewall.sh`.
+1. **`.docker/Dockerfile`** — copy [references/Dockerfile](references/Dockerfile) verbatim. It is Anthropic's published devcontainer image (base bumped to `node:24` LTS): non-root `node` user, dev tools, `git-delta`, zsh+powerlevel10k, `@anthropic-ai/claude-code` installed globally, and a passwordless-sudo rule scoped to *only* `init-firewall.sh`.
 
 2. **`.docker/init-firewall.sh`** — copy [references/init-firewall.sh](references/init-firewall.sh). Edit the `for domain in ...` allowlist (see [Tuning the allowlist](#tuning-the-egress-allowlist)) to match what your project actually needs. GitHub IP ranges are fetched dynamically; you only list extra domains.
 
-3. **`docker-compose.yml`** — copy [references/docker-compose.yml](references/docker-compose.yml) into the repo root. Replace the `<project>` placeholder in `container_name`. Adjust the published port (`5173` = Vite default) to your dev server. For a Rust/Haskell project, set `INSTALL_RUST`/`INSTALL_HASKELL` to `"true"` here and uncomment the matching registry block in step 2 — see [Language toolchains](#language-toolchains-rust--haskell).
+3. **`docker-compose.yml`** — copy [references/docker-compose.yml](references/docker-compose.yml) into the repo root. Replace the `<project>` placeholder in `container_name`. Adjust the published port (`5173` = Vite default) to your dev server. For a Rust/Haskell/Go project, set `INSTALL_RUST`/`INSTALL_HASKELL`/`INSTALL_GO` to `"true"` here and uncomment the matching registry block in step 2 — see [Language toolchains](#language-toolchains-rust--haskell--go).
 
 4. **Build & start**:
    ```sh
@@ -127,14 +127,15 @@ hard way; each is independently deletable):
    bypass mode** — a `Bash(git push:*)` deny keeps holding (pair with the
    `sandboxed-agent-git-relay` skill for credential-free push/PR/merge).
 
-## Language toolchains (Rust / Haskell)
+## Language toolchains (Rust / Haskell / Go)
 
-The image is Node-first (Claude Code needs it). Rust and Haskell are added only when you flip a build arg, so a TS project stays the small original image.
+The image is Node-first (Claude Code needs it). Rust, Haskell, and Go are added only when you flip a build arg, so a TS project stays the small original image.
 
 **Enable in `docker-compose.yml`** under `build.args` (and rebuild):
 ```yaml
 INSTALL_RUST: "true"      # rustup + cargo, pinned RUST_VERSION
 INSTALL_HASKELL: "false"  # GHCup + GHC + cabal — heavy, see warning
+INSTALL_GO: "false"       # official tarball → ~/.go, pinned GO_VERSION
 ```
 
 ### The one rule that explains the whole design: build-time vs runtime network
@@ -150,8 +151,9 @@ The firewall is the container **entrypoint** — it runs at `docker compose up`,
 So in `init-firewall.sh` you add only the **package registries**, not the toolchain CDNs:
 - **Rust** → `index.crates.io`, `static.crates.io` (add `static.rust-lang.org` only if you run `rustup update`/add toolchains at runtime)
 - **Haskell** → `hackage.haskell.org` (add `downloads.haskell.org` only if you `ghcup install` at runtime)
+- **Go** → `proxy.golang.org`, `sum.golang.org` (the checksum DB is consulted on every module download — allowlist both or `go mod download` hangs). A stdlib-only server needs neither.
 
-The commented blocks are already in `init-firewall.sh`; uncomment your language and rebuild (the script is `COPY`d into the image). And the attack you care about — `build.rs` / `Setup.hs` running arbitrary code — fires at **runtime**, where the firewall *is* active. That's the whole point.
+The commented blocks are already in `init-firewall.sh`; uncomment your language and rebuild (the script is `COPY`d into the image). And the attack you care about — `build.rs` / `Setup.hs` / `go generate` / malicious module code in `go test` — fires at **runtime**, where the firewall *is* active. That's the whole point.
 
 The browser row generalizes the same move: anything whose network need is **only at build
 time** (a toolchain, a browser, apt-installed system libs) can be baked into the image and
@@ -161,10 +163,11 @@ baking Playwright Chromium so a full e2e suite runs in-container with zero runti
 `cloudflare-workers-e2e-playwright` skill.
 
 ### Warnings
-- **Haskell is heavy**: GHC adds several GB and ~10–20 min to the first build. Enable `INSTALL_HASKELL` only on Haskell projects.
-- **One language per project**: you *can* set both true, but the image balloons. Prefer one toolchain per repo.
-- **Pin versions**: `RUST_VERSION` / `GHC_VERSION` / `CABAL_VERSION` are build args. Pinning keeps the one-time build-time fetch (itself a supply-chain surface) reproducible.
-- **Verify in-container**: after `up`, `cargo --version` / `ghc --version && cabal --version` should work alongside `claude`.
+- **Haskell is heavy**: GHC adds several GB and ~10–20 min to the first build. Enable `INSTALL_HASKELL` only on Haskell projects. (Go is the light one: a single ~250 MB tarball, no meaningful build-time cost.)
+- **One language per project**: you *can* set several true, but the image balloons. Prefer one toolchain per repo.
+- **Pin versions**: `RUST_VERSION` / `GHC_VERSION` / `CABAL_VERSION` / `GO_VERSION` are build args. Pinning keeps the one-time build-time fetch (itself a supply-chain surface) reproducible. Check the pinned Go tarball still exists before building: `curl -sIL "https://go.dev/dl/go<ver>.linux-amd64.tar.gz" -o /dev/null -w "%{http_code}"` → `200`.
+- **Verify in-container**: after `up`, `cargo --version` / `ghc --version && cabal --version` / `go version` should work alongside `claude`.
+- **Go installs as the `node` user** (`~/.go`, plus `~/go/bin` on PATH for `go install`ed tools) because `/usr/local` isn't node-writable at that Dockerfile stage — don't move the block above `USER node`.
 
 ## Daily workflow
 
@@ -203,7 +206,7 @@ Lifecycle: `exit`/Ctrl-D leaves the shell (container keeps running). `docker com
 
 The bind mount only exposes the project (`/workspace`). Claude Code skills that live *outside* the project — e.g. a personal skills repo you maintain as a sibling directory — are invisible to the in-container agent, so its `~/.claude/skills` is empty.
 
-Expose them **read-only via a gitignored `docker-compose.override.yml`** (single source of truth, no copy → no drift):
+Expose them **read-only via a gitignored `docker-compose.override.yml`** (single source of truth, no copy → no drift — template: [references/docker-compose.override.yml](references/docker-compose.override.yml)):
 
 ```yaml
 # docker-compose.override.yml  (gitignore this — it encodes a host-specific path)

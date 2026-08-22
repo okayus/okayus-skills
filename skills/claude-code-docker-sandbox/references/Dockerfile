@@ -1,4 +1,7 @@
-FROM node:20
+# node:24 = current Node LTS (Krypton). Must be >= 22: @anthropic-ai/claude-code
+# now requires node >=22, so node:20 triggers an EBADENGINE warning and the
+# in-container Claude Code agent misbehaves. Bump the LTS major as new ones land.
+FROM node:24
 
 ARG TZ
 ENV TZ="$TZ"
@@ -82,22 +85,25 @@ RUN sh -c "$(wget -O- https://github.com/deluan/zsh-in-docker/releases/download/
 RUN npm install -g @anthropic-ai/claude-code@${CLAUDE_CODE_VERSION}
 
 # ── Optional language toolchains (opt-in via build args) ─────────────────────
-# node:20 is the base because Claude Code itself is an npm package and needs a
-# Node runtime even in a Rust/Haskell-only project. These toolchains are layered
-# on top and only installed when their build arg is "true".
+# node:24 is the base because Claude Code itself is an npm package and needs a
+# Node runtime even in a Rust/Haskell/Go-only project. These toolchains are
+# layered on top and only installed when their build arg is "true".
 #
 # IMPORTANT: these download at BUILD time, BEFORE init-firewall.sh runs (the
 # firewall is the container entrypoint, not part of the image build). So the
 # toolchain CDNs (sh.rustup.rs, get-ghcup.haskell.org, static.rust-lang.org,
-# downloads.haskell.org) do NOT need to be in the runtime allowlist — only the
-# package registries you fetch from during development do (see init-firewall.sh).
-# Versions are pinned to keep this one-time build-time fetch reproducible.
+# downloads.haskell.org, go.dev/dl.google.com) do NOT need to be in the runtime
+# allowlist — only the package registries you fetch from during development do
+# (see init-firewall.sh). Versions are pinned to keep this one-time build-time
+# fetch reproducible.
 
 # Rust via rustup → ~/.cargo. cargo's build.rs runs arbitrary code at build time,
 # the same class of supply-chain hole as npm postinstall; the runtime firewall
 # contains it. Runtime registry domains needed: index.crates.io, static.crates.io.
 ARG INSTALL_RUST=false
-ARG RUST_VERSION=1.78.0
+# Rust moves fast — check current stable (https://endoflife.date/rust) before building.
+# edition2024 crates require >= 1.85; 1.97 was stable as of 2026-08.
+ARG RUST_VERSION=1.97.0
 RUN if [ "$INSTALL_RUST" = "true" ]; then \
       curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs \
         | sh -s -- -y --default-toolchain "${RUST_VERSION}" --profile minimal ; \
@@ -118,6 +124,23 @@ RUN if [ "$INSTALL_HASKELL" = "true" ]; then \
       curl --proto '=https' --tlsv1.2 -sSf https://get-ghcup.haskell.org | sh ; \
     fi
 ENV PATH=$PATH:/home/node/.ghcup/bin
+
+# Go via official tarball → /home/node/.go (non-root install; /usr/local isn't
+# writable by node at this point). `go generate` and code in fetched modules run
+# arbitrary code at build/test time, the same class of supply-chain hole as npm
+# postinstall; the runtime firewall contains it. Runtime registry domains
+# needed: proxy.golang.org, sum.golang.org. GOPATH bin (~/go/bin) is on PATH so
+# `go install`ed tools work.
+ARG INSTALL_GO=false
+ARG GO_VERSION=1.26.0
+RUN if [ "$INSTALL_GO" = "true" ]; then \
+      ARCH=$(dpkg --print-architecture) && \
+      curl -fsSL "https://go.dev/dl/go${GO_VERSION}.linux-${ARCH}.tar.gz" -o /tmp/go.tar.gz && \
+      mkdir -p /home/node/.go && \
+      tar -C /home/node/.go --strip-components=1 -xzf /tmp/go.tar.gz && \
+      rm /tmp/go.tar.gz ; \
+    fi
+ENV PATH=$PATH:/home/node/.go/bin:/home/node/go/bin
 
 
 # Copy and set up firewall script

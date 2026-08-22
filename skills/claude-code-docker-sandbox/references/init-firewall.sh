@@ -101,6 +101,10 @@ done < <(echo "$gh_ranges" | jq -r '(.web + .api + .git)[]' | aggregate -q)
 #   Haskell (cabal):
 #     "hackage.haskell.org"  # package index + tarballs
 #   # "downloads.haskell.org"# only if you `ghcup install` at runtime
+#
+#   Go (go mod download / go get / go install):
+#     "proxy.golang.org"     # module proxy (index + zips)
+#     "sum.golang.org"       # checksum database, consulted on module download
 # ─────────────────────────────────────────────────────────────────────────────
 for domain in \
     "registry.npmjs.org" \
