@@ -45,7 +45,7 @@ to git with zero in-sandbox moving parts.
 | **GitHub App installation token** | ✅ 1-hour expiry, mintable offline from the App private key, down-scopable per token (one repo, `contents:write` + `pull_requests:write`), pushes/PRs trigger CI normally, PRs show a `bot` author |
 | Deploy key (SSH) | repo-wide write **forever**, cannot create PRs (no API), needs ruleset care; SSH-agent forwarding grants ambient *use* to the sandbox — capability inside the boundary |
 | `GITHUB_TOKEN` in Actions | PRs it creates get CI runs stuck in an **approval-required** state ("Approve workflows to run") — kills unattended loops |
-| Fine-grained PAT | static user-bound bearer secret; expiry policy = recurring human toil |
+| Fine-grained PAT | static user-bound bearer secret; expiry policy = recurring human toil — **but** if a repo-scoped, expiring token *inside* the sandbox is an acceptable trade for having no relay at all, that path is documented in `sandboxed-agent-github-token-via-1password` (token resolved from 1Password at `docker compose up`, env only) |
 | OIDC for git push | does not exist — GitHub's OIDC is outbound (Actions → clouds) only |
 
 ## Setup

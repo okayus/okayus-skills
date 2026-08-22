@@ -31,7 +31,7 @@ Do **not** use this when: you need the full VS Code Dev Containers UX (use the o
 
 - **What it stops**: `postinstall` scripts and run-time code from writing outside the project dir, reading host home/credentials, or reaching non-allowlisted network hosts. Blast radius of a malicious package is the bind-mounted project dir + the allowlisted domains.
 - **What it does NOT stop**: data exfiltration *through* an allowlisted domain (e.g. pushing secrets to a GitHub repo you allowed — the firewall filters by hostname, not by intent), kernel exploits (shared kernel), or anything you mount writable. Keep the allowlist narrow and never mount host secrets (`~/.ssh`, cloud cred files) into the container.
-- **git push stays on the host.** Don't put git credentials in the container. The agent inside can read `git status`/`git log` (the `.git` dir is bind-mounted) but you run `commit`/`push` from the host. This keeps your GitHub token out of the isolation boundary.
+- **git push stays on the host.** Don't put git credentials in the container. The agent inside can read `git status`/`git log` (the `.git` dir is bind-mounted) but you run `commit`/`push` from the host. This keeps your GitHub token out of the isolation boundary. Two documented ways to let the agent push anyway: credential-free via `sandboxed-agent-git-relay` (host-side relay + GitHub App), or — accepting a **repo-scoped, expiring** token inside the boundary — `sandboxed-agent-github-token-via-1password` (fine-grained PAT resolved from 1Password at `docker compose up`, env only, never on disk).
 
 ## Deliverables (completion criteria)
 
@@ -131,7 +131,9 @@ hard way; each is independently deletable):
    normal prompting. This is exactly the setup `bypassPermissions` is documented
    for (isolated container, OS-level boundary), and **deny rules still apply in
    bypass mode** — a `Bash(git push:*)` deny keeps holding (pair with the
-   `sandboxed-agent-git-relay` skill for credential-free push/PR/merge).
+   `sandboxed-agent-git-relay` skill for credential-free push/PR/merge, or with
+   `sandboxed-agent-github-token-via-1password` when a repo-scoped token in the
+   sandbox is acceptable — that skill replaces the blanket deny with targeted rules).
 
 ## Language toolchains (Rust / Haskell / Go)
 
