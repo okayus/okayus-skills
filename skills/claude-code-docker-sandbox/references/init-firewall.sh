@@ -52,7 +52,10 @@ ipset create allowed-domains hash:net
 
 # Fetch GitHub meta information and aggregate + add their IP ranges
 echo "Fetching GitHub IP ranges..."
-gh_ranges=$(curl -s https://api.github.com/meta)
+# Retry: the embedded Docker DNS can fail on the very first query after container
+# start (curl exit 6 "could not resolve host"); without retries `set -e` kills the
+# container here, before the allowlist loop below even gets its own dig retries.
+gh_ranges=$(curl -sS --retry 5 --retry-all-errors --retry-delay 2 https://api.github.com/meta || true)
 if [ -z "$gh_ranges" ]; then
     echo "ERROR: Failed to fetch GitHub IP ranges"
     exit 1
