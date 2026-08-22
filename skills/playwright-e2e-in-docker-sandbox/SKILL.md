@@ -5,7 +5,7 @@ license: MIT
 compatibility: Designed for Claude Code and similar agents. Assumes the `claude-code-docker-sandbox` environment (Docker Compose, default-deny egress firewall, bind-mounted repo) and a Playwright suite that targets a local `wrangler dev` server — typically wired per `cloudflare-workers-e2e-playwright`. The bake recipe installs Chromium; adapt for other browsers.
 metadata:
   author: okayus
-  version: "0.1.0"
+  version: "0.1.1"
 ---
 
 # Playwright e2e inside the Docker sandbox (credential-free, zero runtime egress)
@@ -76,6 +76,13 @@ Key rules the block implements (the "five details" in the reference):
 and the **exact version pin in two places**: the runtime CDN is blocked, so an
 `ARG PLAYWRIGHT_VERSION` ≠ `@playwright/test` drift cannot self-heal — it surfaces as
 `browser not found` until you bump both and rebuild.
+
+The pin is also a **compatibility** choice, not just a drift guard: `playwright@1.59.1`'s
+`install chromium` **hangs forever right after the download completes on a `node:24`
+base** (no error, no `#N DONE`; `node:22` is fine, `1.62.1` on `node:24` is fine —
+verified 2026-08-22 in matatabetai). If the bake step sits at `100%` with no further
+output, test the pin × base combination standalone before blaming the CDN:
+`docker run --rm -e DEBUG=pw:install node:24 npx -y playwright@<ver> install chromium`.
 
 Gate Chromium's own sandbox off **only in-container** (the container has `NET_ADMIN` but
 not `SYS_ADMIN`, so the setuid sandbox can't initialize):
