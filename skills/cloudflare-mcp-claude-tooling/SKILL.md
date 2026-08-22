@@ -56,6 +56,8 @@ Cloudflare ships several hosted MCP servers (`https://*.mcp.cloudflare.com/mcp`)
    ```
    The `deny` is the point: it turns "git happens on the host, not in the sandbox" from a CLAUDE.md *convention* into an **execution-level guard** — the in-container agent literally cannot commit/push (keeping GitHub credentials out of the boundary). Allow only the *read* git/gh verbs. The template also sets `"enableAllProjectMcpServers": false` — servers from the committed `.mcp.json` get approved individually rather than wholesale.
 
+   **If the sandbox is later allowed to commit or push, narrow the deny accordingly** — a broad `Bash(git push:*)` deny beats every allow rule. With `sandboxed-agent-git-relay`: allow `git add/commit/checkout/switch`, keep only `git push` denied (its step 7). With `sandboxed-agent-github-token-via-1password`: allow `git push origin claude/*` + `gh pr create/view/checks` and deny force pushes / `main` / `gh pr merge` / `gh auth` instead (its `compose-and-git-wiring.md`).
+
 3. **`.gitignore`** additions — keep per-user/secret config out of git:
    ```
    docker-compose.override.yml        # host-specific skills mount (see sandbox skill)
