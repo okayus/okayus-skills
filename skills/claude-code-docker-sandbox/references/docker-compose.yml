@@ -11,10 +11,11 @@ services:
         TZ: Asia/Tokyo
         CLAUDE_CODE_VERSION: latest
         # Opt-in language toolchains. Enable only what this project uses — leaving
-        # both false reproduces the original Node/TS-only image. Haskell adds
+        # all false reproduces the original Node/TS-only image. Haskell adds
         # several GB and ~10-20 min to the build, so flip it on only when needed.
         INSTALL_RUST: "false"
         INSTALL_HASKELL: "false"
+        INSTALL_GO: "false"
     container_name: <project>-dev
     # Required so init-firewall.sh can program iptables/ipset.
     cap_add:
