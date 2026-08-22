@@ -5,7 +5,7 @@ license: MIT
 compatibility: Designed for Claude Code and similar agents. Host = Linux/macOS with Docker Compose v2, 1Password CLI (`op`) and a 1Password account; the claude-code-docker-sandbox layout (`.docker/`, `docker-compose.yml` + gitignored override, bind-mounted repo sharing `.git` with the host); the container image already has git + gh. Repo on GitHub owned by you (personal account, or an org you are a member of) — fine-grained PATs can't be used by outside collaborators.
 metadata:
   author: okayus
-  version: "0.1.1"
+  version: "0.1.2"
 ---
 
 # Sandboxed-agent GitHub token via 1Password (repo-scoped PAT, injected at start)
@@ -157,6 +157,14 @@ Runbooks, the relay-migration checklist and the threat model in full: [reference
 - **Token in a remote URL** → `git remote set-url` with `https://x-access-token:<token>@…` lands in `.git/config`, which the host shares and `git remote -v` prints. Never.
 - **Leftover local `claude/*` branches** → no relay reaps them; `git fetch --prune` after merges, and `delete_branch_on_merge=true` on the repo.
 - **Assuming the `~ALL` no-force ruleset blocks squash merges** → it doesn't (a merge is a fast-forward of `main`); it only blocks rewriting pushed branches.
+- **Private repo on a Free plan = no server-side boundary at all.** Rulesets and branch
+  protection are not enforced on private repos without Pro/Team, so the `main` guard this
+  skill relies on (PR + required check + `bypass_actors: []`) silently does nothing: a
+  tokenless mistake or a compromised sandbox can push `main` directly, and the E2E's
+  `GH013` negative test will *pass the push instead of rejecting it*. Make the repo public
+  (every okayus project does) or pay for Pro before wiring the token; until then only the
+  Claude Code denies and a pre-commit hook stand between the sandbox and `main`
+  (matatabetai, 2026-08-23).
 
 ## Verified on mazuoboeru (2026-08-22, first application) — and what is still open
 
@@ -174,6 +182,7 @@ Confirmed on the real setup (okayus/mazuoboeru, PR #88):
 - Without the desktop-app integration, `eval $(op signin)` in the same terminal (30-minute session) followed by `./up.sh` is the working loop on Linux; the integration itself has not been tried (both applications unlocked this way).
 - `Bash(git push *main)` blocks the refspec form: under bypass mode `claude -p` reported `git push origin HEAD:main` → `Permission … has been denied` (kokemusu, 2026-08-22); `HEAD:refs/heads/main` ends in `main` too and matches the same rule.
 - Second application, kokemusu (2026-08-22, a fresh public repo wired from the skill in one pass): identical results for push / PR / checks, the PR-less `main` push, the workflow rejection and the egress split; see pitfalls for the item-title collision and the `No commits between` and OAuth-expiry surprises.
+- Third application, matatabetai (2026-08-23, a **private** repo): wiring applied in one pass; the tokenless fail-closed start verified (`NOTE: GH_TOKEN absent` in the log, helper present with a single `$GH_TOKEN`, `gh` not logged in). The token E2E waits for the PAT — and for the repo to go public, because the `main` ruleset is unenforced on a private Free-plan repo (pitfalls).
 
 Still open — confirm and write back:
 
