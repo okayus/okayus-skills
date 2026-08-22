@@ -5,7 +5,7 @@ license: MIT
 compatibility: Designed for Claude Code and similar agents. Targets Linux/macOS hosts with Docker + Docker Compose v2. Container is node:24 (LTS) base, non-root `node` user, iptables/ipset egress firewall (needs NET_ADMIN + NET_RAW). Host editor + git stay outside the container; only npm/build/agent execution is isolated.
 metadata:
   author: okayus
-  version: "0.5.0"
+  version: "0.5.1"
 ---
 
 # Claude Code Docker Sandbox
@@ -89,6 +89,12 @@ for domain in \
 
 > **Two robustness fixes are baked into the template** (learned from real failures; keep them):
 > - **`dig` retry.** The embedded Docker DNS can intermittently time out at start — *worse when several sandboxes come up at once*. A single failed `dig` would `exit 1` and kill the container, so the resolve loop retries up to 5×. This is the safety net the telemetry-trap note above warns you need.
+> - **`curl` retry for the GitHub meta fetch.** The same first-query DNS hiccup hits
+>   `gh_ranges=$(curl -s https://api.github.com/meta)` *before* the allowlist loop — and that
+>   one has no retry, so `set -e` kills the container with curl's exit code `6` right after
+>   `Fetching GitHub IP ranges...` (seen on a first `docker compose up -d`, 2026-08-22). The
+>   template now uses `--retry 5 --retry-all-errors --retry-delay 2 … || true` and lets the
+>   existing empty-response check report the failure explicitly.
 > - **`ipset add -exist`.** Providers like Cloudflare serve many hostnames from a *shared anycast IP*. The same IP can already be in the set from an earlier domain; without `-exist` the duplicate add returns non-zero and `set -e` kills the container mid-config. Corollary: because filtering is **IP-based**, you cannot allow one anycast hostname while blocking another that resolves to the same IP (e.g. `docs.mcp.cloudflare.com` vs `bindings.mcp.cloudflare.com`). Control which servers are *used* at the app layer (e.g. `.mcp.json`), not the firewall.
 
 After editing the allowlist you must rebuild, because the script is `COPY`d into the image:
