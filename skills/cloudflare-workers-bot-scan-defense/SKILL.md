@@ -45,6 +45,7 @@ What's actually expensive is the small set of **unauthenticated routes that do r
 | `POST /api/auth/login/begin` (WebAuthn challenge) | crypto + JWT sign + cookie | **High** — challenge generation is CPU |
 | `POST /api/auth/register/begin` | DB read + crypto | **High** if registration is open |
 | `POST /api/auth/login/verify` | DB read + crypto | High — D1 read fires before validation can short-circuit |
+| `POST /api/<resource>` with `Authorization: Bearer` (PAT) | string compares for junk; sha256 + one D1 read for a well-formed `<app>_pat_…` token | Medium — unguessable (256-bit), but every well-formed guess is a D1 read; see `cloudflare-workers-pat-bearer-auth` |
 | `GET /health` | constant body | Low — cheap and harmless |
 | `/api/*` with session middleware | nothing if no cookie (just 401) | **Low** — no D1 touch on missing cookie |
 

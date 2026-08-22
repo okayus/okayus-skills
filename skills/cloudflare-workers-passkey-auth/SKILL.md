@@ -184,7 +184,7 @@ Record each result in the section named; delete the bullet once it's confirmed o
 ## Scope boundary — what this skill does NOT cover
 
 - Spaces, memberships, the `invites` table, owner-only endpoints, the race-safe invite consumption batch, and the first-space bootstrap on initial registration → `cloudflare-workers-space-membership-invite` (this skill only defines the `register/*` contract it plugs into)
-- OAuth (`arctic`, Google/GitHub), PATs, the seeded-session e2e seam → `cloudflare-workers-e2e-playwright` + mazuoboeru
+- OAuth (`arctic`, Google/GitHub), the seeded-session e2e seam → `cloudflare-workers-e2e-playwright` + mazuoboeru; PATs (`Authorization: Bearer` for CLIs / agents / sibling apps, plugged in front of this session layer) → `cloudflare-workers-pat-bearer-auth`
 - Rate-limit binding config, WAF alternatives, bot-scan audit → `cloudflare-workers-bot-scan-defense`
 - `secureHeaders` / CSP, SPA routing, deploy pipeline → `cloudflare-workers-deploy-skeleton`
 - Playwright virtual authenticator, e2e scope → `cloudflare-workers-e2e-playwright`, `playwright-e2e-in-docker-sandbox`
