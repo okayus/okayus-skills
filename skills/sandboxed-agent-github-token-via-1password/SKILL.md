@@ -172,13 +172,13 @@ Confirmed on the real setup (okayus/mazuoboeru, PR #88):
 - `gh auth status` prints the `github_pat_<id>_` prefix of the token (the id part, not the secret) — keep it out of transcripts anyway.
 - The passthrough key can live in the committed `docker-compose.yml` instead of the override (mazuoboeru does): it is not a secret and is inert when unset; only `.docker/sandbox.env` is host-specific.
 - Without the desktop-app integration, `eval $(op signin)` in the same terminal (30-minute session) followed by `./up.sh` is the working loop on Linux; the integration itself has not been tried (both applications unlocked this way).
+- `Bash(git push *main)` blocks the refspec form: under bypass mode `claude -p` reported `git push origin HEAD:main` → `Permission … has been denied` (kokemusu, 2026-08-22); `HEAD:refs/heads/main` ends in `main` too and matches the same rule.
 - Second application, kokemusu (2026-08-22, a fresh public repo wired from the skill in one pass): identical results for push / PR / checks, the PR-less `main` push, the workflow rejection and the egress split; see pitfalls for the item-title collision and the `No commits between` and OAuth-expiry surprises.
 
 Still open — confirm and write back:
 
 - UNVERIFIED: a changed token value makes `./up.sh` (`docker compose up -d`) recreate the container; `down`/`up` recreation is confirmed, value-change recreation is not (fallback: `./up.sh --force-recreate`).
 - UNVERIFIED: the in-container service-account variant — the 1Password domains the egress firewall needs and the per-push request budget (the support page listing domains returned 403 to the fetch on 2026-08-22). See [references/service-account-variant.md](references/service-account-variant.md).
-- UNVERIFIED: Claude Code's match of `Bash(git push *main)` / `Bash(git push *main *)` against the refspec forms (`HEAD:main`, `HEAD:refs/heads/main`) — added after the E2E, not yet probed with `claude -p`.
 
 ## Scope boundary — what this skill does NOT cover
 

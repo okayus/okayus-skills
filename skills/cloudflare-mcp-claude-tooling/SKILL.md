@@ -98,7 +98,7 @@ The firewall is default-deny, so "look it up in the docs" needs a plan. Three la
 
 Which sites speak `llms.txt` (probed 2026-08-22): **yes** — `hono.dev` (+ `llms-full.txt`), `orm.drizzle.team` (+ full), `react.dev`, `vite.dev`, `vitest.dev`, `zod.dev`, `swr.vercel.app`, `developers.cloudflare.com`, `developer.chrome.com/docs/css-ui/`; **no** — MDN, typescriptlang.org, tailwindcss.com, web.dev, playwright.dev (use Context7 or fetch the page). Tell the agent the order in `CLAUDE.md`: Context7 / cloudflare-docs → `llms.txt` index then the page (`llms-full.txt` last, it is huge) → WebSearch, then WebFetch only inside the allowlist.
 
-`.mcp.json` with both servers (project MCP servers still need the one-time interactive trust approval; `claude mcp list` shows `⏸ Pending approval` until then):
+`.mcp.json` with both servers (project MCP servers still need the one-time interactive trust approval; `claude mcp list` shows `⏸ Pending approval` until then — after it, `✔ Connected`, and an in-container `claude -p` resolved `/mdn/content` via Context7 and answered a `<dialog closedby>` question correctly):
 
 ```json
 { "mcpServers": {
