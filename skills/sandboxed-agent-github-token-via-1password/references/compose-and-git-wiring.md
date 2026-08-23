@@ -5,7 +5,7 @@ Two injection points are documented. **Use the first.** The second is what 0.1.x
 | | **Default: exec-time** | Alternative: compose `environment:` |
 |---|---|---|
 | Token is part of the container config | no | **yes** |
-| `docker compose up -d` without `op run` | harmless, idempotent (`Running`) | **recreates the container** — token gone, every process inside killed |
+| `docker compose up -d` without 1Password | harmless, idempotent (`Running`) | **recreates the container** — token gone, every process inside killed |
 | Who has the token | the `./shell.sh` shell and its children | every process in the container, incl. PID 1 |
 | Rotation | open a new `./shell.sh` | `./up.sh` → container recreated |
 | `docker inspect … Config.Env` | no `GH_TOKEN` line at all | `GH_TOKEN=…` (or the bare-key / empty failure shapes) |
@@ -39,41 +39,74 @@ exec docker compose up -d "$@"
 #   ./shell.sh                      # zsh that can `git push` / `gh pr create`
 #   ./shell.sh claude --continue    # or run a command directly
 #
-# Why not `environment: { GH_TOKEN: ... }` in docker-compose.yml? Then the token is
-# part of the container's config, and any `docker compose up -d` that doesn't go
-# through `op run` counts as a config change: compose stops and RECREATES the
-# container, silently dropping the token and every process inside (including a
-# running Claude session). Injecting at exec time keeps `./up.sh` credential-free and
-# idempotent. `docker exec -e GH_TOKEN` (name only, no `=value`) forwards the variable
-# from this process's environment — the value never appears in argv, so it is not
-# visible in `ps` on the host. Fail closed: no op, no token, no push.
+# Two things this script is careful about:
 #
+# 1. The token is NOT in docker-compose.yml `environment:`. There it would be part of
+#    the container's config, so any `docker compose up -d` that doesn't go through
+#    1Password counts as a config change: compose stops and RECREATES the container,
+#    silently dropping the token and every process inside (including a running agent
+#    session). Injecting at exec time keeps `./up.sh` credential-free and idempotent.
+#
+# 2. The interactive process is NOT wrapped in `op run`. `op run` conceals secrets on
+#    the stdout/stderr of its child, i.e. it interposes on those streams — an
+#    interactive `docker exec -it` then loses its terminal: the prompt leaks raw
+#    escape templates and the pty falls back to 80x24. So resolve the value first with
+#    `op read`, then exec docker with the real terminal still attached. The value
+#    travels in the environment, never in argv, so it stays out of `ps` on the host.
+#
+# Fail closed: no 1Password, no token, no push.
 # Skill: sandboxed-agent-github-token-via-1password (exec-time variant).
 set -eu
 cd "$(dirname "$0")"
 [ "$#" -gt 0 ] || set -- zsh
 
-state=$(docker inspect -f '{{.State.Running}}' <container> 2>/dev/null || echo missing)
+container="<container>"          # e.g. myproject-dev — MUST be quoted: bare <container> is a redirect
+envfile=.docker/sandbox.env
+
+state=$(docker inspect -f '{{.State.Running}}' "$container" 2>/dev/null || echo missing)
 [ "$state" = "true" ] || {
-  echo "shell.sh: container <container> is not running (state: $state). Start it with ./up.sh" >&2
+  echo "shell.sh: container $container is not running (state: $state). Start it with ./up.sh" >&2
   exit 1
 }
 
-exec op run --env-file=.docker/sandbox.env -- sh -c '
-  [ -n "${GH_TOKEN:-}" ] || {
-    echo "shell.sh: op did not resolve GH_TOKEN — check .docker/sandbox.env and the op session" >&2
-    exit 1
-  }
-  exec docker exec -it -e GH_TOKEN <container> "$@"
-' shell.sh "$@"
+[ -f "$envfile" ] || {
+  echo "shell.sh: $envfile not found (copy .docker/sandbox.env.example and point it at your vault)" >&2
+  exit 1
+}
+
+# `GH_TOKEN="op://<vault>/<item>/credential"` -> the bare op:// reference.
+# Tolerates an `export` prefix, spaces round the `=`, single or double quotes, a
+# trailing comment, trailing whitespace and CRLF line endings — each of which makes
+# `op read` fail on a reference that looks perfectly correct in the editor.
+ref=$(sed -n 's/^[[:space:]]*\(export[[:space:]][[:space:]]*\)\{0,1\}GH_TOKEN[[:space:]]*=[[:space:]]*//p' "$envfile" \
+      | head -1 | sed 's/[[:space:]]*#.*$//' | tr -d '"'"'"'\r' | sed 's/[[:space:]]*$//')
+case "$ref" in
+  op://*) ;;
+  *) echo "shell.sh: no op:// reference for GH_TOKEN in $envfile" >&2; exit 1 ;;
+esac
+
+GH_TOKEN=$(op read "$ref") || {
+  echo "shell.sh: op read failed for $ref (1Password session? item renamed?)" >&2
+  exit 1
+}
+[ -n "$GH_TOKEN" ] || { echo "shell.sh: resolved GH_TOKEN is empty" >&2; exit 1; }
+export GH_TOKEN
+
+# -t only when stdin AND stdout are terminals: `./shell.sh zsh -lc '…'` from a script
+# otherwise dies with "cannot attach stdin to a TTY-enabled container", and
+# `./shell.sh … > out.txt` from a real terminal would litter the file with pty
+# escapes and CRLF.
+[ -t 0 ] && [ -t 1 ] && TT=-it || TT=-i
+exec docker exec $TT -e GH_TOKEN "$container" "$@"
 ```
 
-`chmod +x up.sh shell.sh`. Four details:
+`chmod +x up.sh shell.sh`. Five details:
 
-- **`-e GH_TOKEN`, name-only.** "The Docker CLI client checks the value the variable has in your local environment and passes it to the container"; with no `=` and nothing exported, the variable stays unset inside (`docker run` reference — the `docker exec` page doesn't state it, verified by experiment 2026-08-23). So the value is taken from `op run`'s environment and **never enters argv**: `ps -eo args` on the host shows `docker exec -e GH_TOKEN <container> zsh`. Writing `-e GH_TOKEN="$GH_TOKEN"` would put the secret in every process listing on the box.
-- **The inner `sh -c` guard** turns "op resolved nothing" into a message instead of a silent tokenless shell. `op run` exits 0 with the variable unset in some failure modes, so checking is not redundant.
-- **`exec op run … -- sh -c '…' shell.sh "$@"`** — the trailing `shell.sh "$@"` sets `$0` and re-supplies the arguments to the inner shell, so `./shell.sh claude --continue` works and quoting survives.
-- **`-it`** is right for an interactive shell; drop `-t` for non-interactive one-liners driven from a script (`./shell.sh zsh -lc '…'` is fine either way in practice).
+- **`op read`, not `op run`.** This is the 0.2.1 fix. `op run` conceals secrets on its child's stdout/stderr ("Secrets printed to stdout or stderr are concealed by default" — `op run` reference), which means it sits on those streams, and an interactive `docker exec -it` under it never holds the real terminal: raw `${…}` prompt templates, pty stuck at 80x24, no `SIGWINCH`. `op read` prints the one secret to *its own* stdout, which the command substitution captures, and then nothing stands between your terminal and the container. (`op run --no-masking` exists; whether it also drops the stream interposition is undocumented and unverified — don't reach for it. `op run` remains fine for genuinely non-interactive commands.)
+- **`-e GH_TOKEN`, name-only.** "The Docker CLI client checks the value the variable has in your local environment and passes it to the container"; with no `=` and nothing exported, the variable stays unset inside (`docker run` reference — the `docker exec` page doesn't state it, verified by experiment 2026-08-23). So the value is taken from this script's exported environment and **never enters argv**: `ps -eo args` on the host shows `docker exec -it -e GH_TOKEN <container> zsh`. Writing `-e GH_TOKEN="$GH_TOKEN"` would put the secret in every process listing on the box.
+- **Three guards, three distinct messages** — container not running / no `op://` reference in the env file / `op read` failed or returned empty. Each is a different fix, so don't collapse them: a silent tokenless shell costs far more than the four lines.
+- **`[ -t 0 ] && [ -t 1 ] && TT=-it || TT=-i`** — verified 2026-08-23: `docker exec -it` from a non-interactive caller fails outright, `docker exec -i` works. Test **both** streams: stdin alone would still allocate a pty for `./shell.sh … > out.txt`, filling the file with escape sequences and CRLF. Without this the E2E's "drive one-liners from the host" step only works when a human types it.
+- **`$TT` is deliberately unquoted** so it expands to a single flag word; it holds a literal `-it`/`-i`, never user input.
 
 Substitute your container name for `<container>` (the compose `container_name:`).
 
@@ -131,8 +164,9 @@ Pick this only if every process in the container needs the token — e.g. a long
 services:
   dev:
     environment:
-      # Resolved from the environment of the `docker compose` process, i.e. from
-      # `op run` in ./up.sh. See the failure table below before trusting either form.
+      # Resolved from the environment of the `docker compose` process, i.e. from an
+      # `op run` wrapper in ./up.sh. See the failure table below before trusting
+      # either form. (In the exec-time default there is no key here at all.)
       GH_TOKEN: "${GH_TOKEN:-}"      # explicit interpolation; unset -> "" (set but empty)
       # GH_TOKEN:                    # valueless pass-through; unset -> a BARE key, no `=`
 ```
@@ -189,6 +223,7 @@ Starting from the `cloudflare-mcp-claude-tooling` template:
       "Bash(git push *main)",          // ends in main: `origin main`, `HEAD:main`, `HEAD:refs/heads/main`
       "Bash(git push *main *)",        // same with trailing flags
       "Bash(git push * --delete *)",
+      "Bash(git push * :*)",           // the OTHER delete form: `git push origin :claude/x`
       "Bash(gh pr merge *)",          // drop this line (and add the --auto form to allow) for opt-in agent merges
       "Bash(gh auth *)",              // no `gh auth login` (stores a token), no `gh auth token` (prints it)
       "Bash(gh api *)"                // the merge endpoint is one PUT away; read CI via `gh pr checks`
