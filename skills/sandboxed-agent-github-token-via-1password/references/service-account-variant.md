@@ -6,7 +6,7 @@ Not the default. Read this only if one of these is true:
 - several tokens / secrets must reach the sandbox and you'd rather manage one 1Password vault than several env passthroughs;
 - the host can't run `op` interactively (headless box, CI) but a service account token can be provisioned to it.
 
-What you pay: a **second secret in the container** (`OP_SERVICE_ACCOUNT_TOKEN`, which reads the whole vault it is scoped to), **egress to 1Password** from the sandbox, and 1Password's service-account **rate limits** on every push. The host-side `op run` injection needs none of these.
+What you pay: a **second secret in the container** (`OP_SERVICE_ACCOUNT_TOKEN`, which reads the whole vault it is scoped to), **egress to 1Password** from the sandbox, and 1Password's service-account **rate limits** on every push. The host-side `op read` injection needs none of these.
 
 ## Setup
 
@@ -32,7 +32,7 @@ What you pay: a **second secret in the container** (`OP_SERVICE_ACCOUNT_TOKEN`, 
 
 ## Trade-offs, concretely
 
-| | host `op run` (default) | in-container service account |
+| | host `op read` in `./shell.sh` (default) | in-container service account |
 |---|---|---|
 | Secrets inside the container | the GitHub token, in `./shell.sh` shells only | the service-account token, in the container config — reads the whole sandbox vault |
 | Rotation | new `./shell.sh` (env-in-compose variant: `./up.sh`, container recreate) | edit the 1Password item; next push picks it up |

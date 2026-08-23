@@ -66,8 +66,8 @@ op item create --category "API Credential" --vault "<vault>" \
 `.docker/sandbox.env` (gitignored; host-specific vault/item names):
 
 ```
-# Resolved by `op run` on the host inside ./shell.sh (per shell, never in the
-# container config). This file holds a 1Password secret REFERENCE, never a value.
+# Read by ./shell.sh on the host (`op read`), per shell, never in the container
+# config. This file holds a 1Password secret REFERENCE, never a value.
 # Copy from sandbox.env.example.
 GH_TOKEN="op://<vault>/github-pat-<repo>-sandbox/credential"
 ```
@@ -90,17 +90,25 @@ Full copy-ready files, with the reasoning for every flag, are in [compose-and-gi
 exec docker compose up -d "$@"
 
 # shell.sh — the ONLY door the token comes through, into this shell and its children.
-exec op run --env-file=.docker/sandbox.env -- docker exec -it -e GH_TOKEN <container> "$@"
+# NOT `op run -- docker exec`: op run interposes on stdout/stderr and breaks the tty.
+GH_TOKEN=$(op read "op://<vault>/github-pat-<repo>-sandbox/credential"); export GH_TOKEN
+[ -t 0 ] && [ -t 1 ] && TT=-it || TT=-i     # -t only with real terminals on both ends
+exec docker exec $TT -e GH_TOKEN <container> "$@"
 ```
 
 `chmod +x up.sh shell.sh`. Run them from the project directory **without `-f`** so `docker-compose.override.yml` (the skills mount) is auto-loaded — the `-f` trap from `claude-code-docker-sandbox`.
 
-What `op run` does (docs): "loads the specified secrets, then runs the provided command in a subprocess with the secrets made available as environment variables only for the duration of the process". Here that subprocess is the `docker exec` client, which forwards `GH_TOKEN` into the exec'd process by name; when the shell exits, the token is gone from the container entirely. Note the consequence: **an agent cannot re-open its own tokened shell** — `op` has no session in a non-interactive agent shell — which is the intended human checkpoint, not a bug to route around.
+`op read` resolves one `op://` reference and writes that secret to stdout, so `GH_TOKEN=$(op read …)` puts it in the script's environment and nowhere else; `docker exec -e GH_TOKEN` then forwards it by name into the exec'd process. When the shell exits, the token is gone from the container entirely.
+
+Why not `op run --env-file=… -- docker exec …`, which reads more naturally? Because `op run` "loads the specified secrets, then runs the provided command in a subprocess with the secrets made available as environment variables only for the duration of the process" **and conceals secrets printed to that subprocess's stdout/stderr** — it interposes on those streams, so an interactive `docker exec -it` underneath never holds the real terminal (broken prompt, 80x24 pty; kokemusu, 2026-08-23). `op run` is still fine for non-interactive commands; `op read` is fine for both, so this skill uses `op read` everywhere.
+
+Note the consequence either way: **an agent cannot re-open its own tokened shell** — `op` has no session in a non-interactive agent shell — which is the intended human checkpoint, not a bug to route around.
 
 Verify on the host without printing the value:
 
 ```sh
-op run --env-file=.docker/sandbox.env -- sh -c 'echo "GH_TOKEN length: ${#GH_TOKEN}"'
+op read "op://<vault>/github-pat-<repo>-sandbox/credential" | wc -c    # → 94 (93 + newline)
+op run --env-file=.docker/sandbox.env -- sh -c 'echo "GH_TOKEN length: ${#GH_TOKEN}"'   # also fine (non-interactive)
 ```
 
-Do **not** verify with `op run … -- env`: 1Password masks any output matching an injected secret, so the line reads `GH_TOKEN=<concealed by 1Password>` — exactly 24 characters, which looks like a truncated 93-character token. `echo ${#GH_TOKEN}` prints a number that can't match the secret, so it is not masked.
+Do **not** verify with `op run … -- env`: 1Password conceals any output matching an injected secret, so the line reads `GH_TOKEN=<concealed by 1Password>` — exactly 24 characters, which looks like a truncated 93-character token. A length or a byte count can't match the secret, so it is not concealed. (That same concealing is why `op run` must not wrap the interactive `docker exec` — see above.)
