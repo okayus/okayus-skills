@@ -41,7 +41,7 @@ Companion: `gh api -X PATCH repos/<owner>/<repo> -f delete_branch_on_merge=true`
 | Merge a CI-green PR | only with the trailer, by the relay | **yes** (`contents: write` covers the merge API; the `gh pr merge` / `gh api` denies bind only the cooperative agent) | strong required checks; short expiry; revoke on suspicion; if unacceptable → keep the relay |
 | Edit workflow files | rejected (App lacks `workflows`) | rejected (token lacks `workflows`) | — |
 | Reach other repos / gists / packages | no | no (one selected repo; packages unsupported) | — |
-| Persist beyond the container | no | no (env only; expiry) | never `gh auth login` in the container |
+| Persist beyond the container | no | no (one shell's env; expiry) | never `gh auth login` in the container |
 | Exfiltrate the token | nothing to exfiltrate | possible through allowed egress | the token is worth one repo for ≤ 90 days |
 
 The honest summary: **the relay keeps policy outside the boundary; this skill keeps policy in GitHub's rulesets and the token's scope, and keeps *convention* in Claude Code rules.** Choose by which failure you can live with.
@@ -52,15 +52,15 @@ The honest summary: **the relay keeps policy outside the boundary; this skill ke
 
 1. GitHub → Settings → Developer settings → Fine-grained tokens → the token → *Regenerate token* (same scopes) → copy.
 2. `op item edit "github-pat-<repo>-sandbox" 'credential=<new>' 'expires=<new date>'`.
-3. `./up.sh` — compose sees a changed env value and recreates the container (UNVERIFIED: confirm it recreates rather than reports "up-to-date"; if not, `./up.sh --force-recreate`).
-4. In-container `gh auth status` → OK. Calendar reminder for the next date.
+3. Open a fresh `./shell.sh` — that is the whole step; the container never held the value. (Env-in-compose variant: `./up.sh`, which recreates the container because the value changed — verified 2026-08-23, so `--force-recreate` is not needed — and kills every process inside, so do it deliberately.)
+4. In that shell, `gh auth status` → OK. Calendar reminder for the next date.
 
 **Expired token (symptom first)**: `git push` → `remote: Invalid username or token` / `401`; `gh` → `HTTP 401`. `op item get "github-pat-<repo>-sandbox" --fields label=expires` → past date → rotate.
 
 **Revoke (incident)**
 
 1. GitHub → the token → *Delete*. Instant; nothing in the container can refresh it.
-2. `docker compose down` (the env copy dies with the container).
+2. Exit every `./shell.sh` shell — that alone removes the token from the container (env variant: `docker compose down`, since the copy lives in the container config).
 3. Audit: `gh api repos/<o>/<r>/events --jq '.[] | select(.type | test("Push|PullRequest")) | {type, actor: .actor.login, created_at}'` from the **host** (your normal `gh` login), recent branches `gh api repos/<o>/<r>/branches --jq '.[].name'`, merged PRs.
 4. Mint a new token only after the cause is understood.
 
@@ -74,6 +74,6 @@ The honest summary: **the relay keeps policy outside the boundary; this skill ke
 4. `CLAUDE.md`: replace the relay paragraph (`claude/*` + `Relay-Merge: yes` trailer + unauthenticated curl) with the token paragraph; decide the merge policy.
 5. Reap local `claude/*` branches the relay used to delete: `git fetch --prune && git branch --merged main | grep '^  claude/' | xargs -r git branch -d`.
 6. The relay's `isTipAlreadyMerged` / squash-residue machinery is simply gone — nothing replaces it because nothing polls.
-7. Run the E2E in `SKILL.md`; record the differences in *Unverified claims*.
+7. Run the E2E in `SKILL.md`; record the differences under *Still open — confirm and write back*.
 
-Revert = stop using `./up.sh` (plain `docker compose up -d` → tokenless container), restore the old settings, `systemctl --user enable --now` the timer.
+Revert = stop using `./shell.sh` (every shell is then tokenless), restore the old settings, `systemctl --user enable --now` the timer.
