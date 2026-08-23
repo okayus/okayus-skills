@@ -5,7 +5,7 @@ license: MIT
 compatibility: Designed for Claude Code and similar agents. Targets Linux/macOS hosts with Docker + Docker Compose v2. Container is node:24 (LTS) base, non-root `node` user, iptables/ipset egress firewall (needs NET_ADMIN + NET_RAW). Host editor + git stay outside the container; only npm/build/agent execution is isolated.
 metadata:
   author: okayus
-  version: "0.5.1"
+  version: "0.6.0"
 ---
 
 # Claude Code Docker Sandbox
@@ -42,6 +42,7 @@ You're done when:
 3. `docker compose exec dev zsh` drops you into `/workspace` as the non-root `node` user, and your project files are visible there (bind mount works).
 4. Inside the container, `claude` authenticates successfully and `/status` shows the model — and survives `docker compose down && docker compose up -d` (auth persisted in the `claude-config` volume).
 5. Host-side edits to project files appear inside the container without a rebuild.
+6. The first message of a fresh in-container `claude` session already contains the repo's `docs/status.md` (injected by the committed SessionStart hook from [`agent-status-hub`](../agent-status-hub/SKILL.md)) — the agent knows where the project stands without being told.
 
 ## Setup order
 
@@ -64,6 +65,8 @@ Copy the three template files into your repo, then build and verify. Full commen
 5. **Authenticate Claude Code inside the container** — follow [references/authentication.md](references/authentication.md). The key trap: the OAuth localhost callback can't reach the container, so you copy the URL to a host browser and paste the returned code back at the `Paste code here if prompted` prompt.
 
 6. **Verify** against the deliverables above.
+
+7. **Give the in-container agent its bearings** — apply [`agent-status-hub`](../agent-status-hub/SKILL.md) before the first autonomous loop: a hard-capped `docs/status.md` injected by a SessionStart hook in the **committed** `.claude/settings.json`, written back with `/handoff`, capped in CI. Everything is in the repo (bind-mounted at `/workspace`), so the container needs no rebuild and no extra mount. This matters more in the sandbox than on the host: the container's auto memory and session transcripts live in the `claude-config` volume and never reach the host, so repo files are the only context both sides share.
 
 ## Tuning the egress allowlist
 
@@ -208,6 +211,7 @@ Lifecycle: `exit`/Ctrl-D leaves the shell (container keeps running). `docker com
 - **First MCP server start is slow** if `.mcp.json` uses `npx -y <pkg>` (fetches on first run). Cached afterward in the container home.
 - **New external service added mid-project** → its domain won't resolve/connect until you add it to the allowlist and rebuild. The symptom is a hang or `Connection refused` to a brand-new host.
 - **Scaffolding a project non-interactively** inside the container (e.g. `npx sv create`, `create-vite`, `create-next-app`) has its own prompt-stall traps — see [references/scaffold-notes.md](references/scaffold-notes.md).
+- **Auto memory and sessions are per environment.** `CLAUDE_CONFIG_DIR=/home/node/.claude` is the `claude-config` named volume: whatever the in-container agent "remembers" (auto memory, `claude --continue`) never reaches a host session, and vice versa. Anything both sides must know goes in the repo — `docs/status.md` via `agent-status-hub` — not in memory.
 - **`-f` silently disables `docker-compose.override.yml`.** Compose auto-loads `docker-compose.override.yml` only when you run from the project directory *without* `-f`. The moment you pass `docker compose -f /path/to/docker-compose.yml up`, the override is **not** merged — any mounts/ports/env it added (e.g. the [host-skills mount](#mounting-host-skills-into-the-container)) silently vanish, and the container comes back missing them with no error. **Always `cd` into the project dir and run plain `docker compose ...`.** Diagnose with `docker compose config` (shows the merged result) vs `docker inspect <container> --format '{{json .Mounts}}'` (shows what the *running* container actually has) — if they disagree, an `-f` invocation recreated it without the override.
 
 ## Mounting host skills into the container
