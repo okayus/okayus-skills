@@ -2,7 +2,7 @@
 
 Not the default. Read this only if one of these is true:
 
-- you want to rotate the GitHub token **without recreating the container** (the helper resolves it on every push);
+- you want the token to refresh **without a human opening a new shell** (the helper resolves it on every push). Note since 0.2.0 this is a weaker argument than it was: the exec-time default already rotates without touching the container — the next `./shell.sh` picks up the new value;
 - several tokens / secrets must reach the sandbox and you'd rather manage one 1Password vault than several env passthroughs;
 - the host can't run `op` interactively (headless box, CI) but a service account token can be provisioned to it.
 
@@ -18,7 +18,7 @@ What you pay: a **second secret in the container** (`OP_SERVICE_ACCOUNT_TOKEN`, 
    ```
 
    The token is printed **once** — "1Password CLI only returns the service account token once. Save the token in 1Password immediately" — as a second item in your Private vault (not in the sandbox vault: that would let the service account read itself).
-3. **Inject `OP_SERVICE_ACCOUNT_TOKEN`** into the container the same way this skill injects `GH_TOKEN`: `.docker/sandbox.env` → `OP_SERVICE_ACCOUNT_TOKEN="op://Private/<project>-sandbox-service-account/credential"`, compose override passthrough `OP_SERVICE_ACCOUNT_TOKEN:`. Remove `GH_TOKEN` from the env.
+3. **Inject `OP_SERVICE_ACCOUNT_TOKEN`** into the container the same way this skill injects `GH_TOKEN`: `.docker/sandbox.env` → `OP_SERVICE_ACCOUNT_TOKEN="op://Private/<project>-sandbox-service-account/credential"`. Every process in the container needs it, so this variant does put a secret in the container config — which brings back the recreate hazard (`SKILL.md` pitfalls): a plain `docker compose up -d` without `op run` recreates the container and kills what is inside. Weigh that against what you are buying. Remove `GH_TOKEN` and `shell.sh` from the picture.
 4. **Install `op` in the image** (build-time network is open; the runtime firewall isn't involved): add the apt-repo block from `token-and-1password-setup.md` to `.docker/Dockerfile` (as root, before `USER node`) and rebuild (`docker compose down && docker compose build && docker compose up -d`, no `-f`).
 5. **Credential helper resolves on demand**:
 
@@ -34,8 +34,8 @@ What you pay: a **second secret in the container** (`OP_SERVICE_ACCOUNT_TOKEN`, 
 
 | | host `op run` (default) | in-container service account |
 |---|---|---|
-| Secrets inside the container | the GitHub token (env) | the service-account token (env) — reads the whole sandbox vault |
-| Rotation | `./up.sh` (container recreate) | edit the 1Password item; next push picks it up |
+| Secrets inside the container | the GitHub token, in `./shell.sh` shells only | the service-account token, in the container config — reads the whole sandbox vault |
+| Rotation | new `./shell.sh` (env-in-compose variant: `./up.sh`, container recreate) | edit the 1Password item; next push picks it up |
 | Egress | none beyond GitHub | + 1Password API hosts (fatal allowlist) |
 | Rate limits | none | per service account: `op read` = 3 read requests; non-Business plans 1,000 reads / hour / token (≈ 330 pushes / hour) |
 | Host requirement | interactive `op` (app integration or `op signin`) | none at runtime (token provisioned once) |

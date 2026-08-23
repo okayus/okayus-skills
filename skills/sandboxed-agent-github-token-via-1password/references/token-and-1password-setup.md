@@ -42,7 +42,7 @@ op --version
 
 Unlock without typing the master password each time — **desktop-app integration** (Linux): 1Password app → *Settings → Security → Unlock using system authentication*, then *Settings → Developer → Integrate with 1Password CLI*. `op whoami` then succeeds without `op signin`.
 
-Without the app: `eval $(op signin)` in the same shell (the session env var is per shell, TTL ~30 minutes) — acceptable for a once-a-day `./up.sh`, annoying otherwise.
+Without the app: `eval $(op signin)` in the same shell (the session env var is per shell, TTL ~30 minutes) — acceptable for a once-a-day `./shell.sh`, annoying if you open shells all day (that is the one real cost of exec-time injection).
 
 ## 3. Store the token as the only copy
 
@@ -52,12 +52,12 @@ op item create --category "API Credential" --vault "<vault>" \
   'credential=<paste the token>' \
   'hostname=github.com' \
   'expires=<YYYY-MM-DD>' \
-  'notesPlain=repo <owner>/<repo>; Contents + Pull requests write; no Workflows; used by ./up.sh'
+  'notesPlain=repo <owner>/<repo>; Contents + Pull requests write; no Workflows; injected per shell by ./shell.sh'
 ```
 
-- **One item title per repository** (`github-pat-<repo>-sandbox`). Reusing a title for a second project makes `op read "op://<vault>/<title>/credential"` ambiguous and can inject the *other* project's token — it happened when a second project's `op item create` was copy-pasted with the old `--title`. Before the first `./up.sh`: `op item list --vault <vault> | grep github-pat-`.
+- **One item title per repository** (`github-pat-<repo>-sandbox`). Reusing a title for a second project makes `op read "op://<vault>/<title>/credential"` ambiguous and can inject the *other* project's token — it happened when a second project's `op item create` was copy-pasted with the old `--title`. Before the first `./shell.sh`: `op item list --vault <vault> | grep github-pat-`.
 - Prefer a dedicated vault (e.g. `Sandbox`) over your Private vault: it keeps the service-account variant possible later (service accounts can't read Private vaults) and makes "what can the sandbox reach" a one-vault question.
-- Confirm the field name before wiring anything: `op item get "github-pat-<repo>-sandbox" --format json | jq '.fields[] | {id,label,type}'` — the reference below assumes the API Credential category names it `credential` (UNVERIFIED until you look).
+- Confirm the field name before wiring anything: `op item get "github-pat-<repo>-sandbox" --format json | jq '.fields[] | {id,label,type}'` — the API Credential category names it `credential` (confirmed on mazuoboeru and kokemusu, 2026-08-22) — still worth one look before wiring.
 - Smoke: `op read "op://<vault>/github-pat-<repo>-sandbox/credential" | wc -c` → a length, not the token, in your terminal.
 - Paste the token into the item **directly from the GitHub page**; don't route it through a file or the clipboard manager's history if you can avoid it.
 
@@ -66,8 +66,9 @@ op item create --category "API Credential" --vault "<vault>" \
 `.docker/sandbox.env` (gitignored; host-specific vault/item names):
 
 ```
-# Resolved by `op run` on the host at `docker compose up`. This file holds a
-# 1Password secret REFERENCE, never a value. Copy from sandbox.env.example.
+# Resolved by `op run` on the host inside ./shell.sh (per shell, never in the
+# container config). This file holds a 1Password secret REFERENCE, never a value.
+# Copy from sandbox.env.example.
 GH_TOKEN="op://<vault>/github-pat-<repo>-sandbox/credential"
 ```
 
@@ -80,24 +81,26 @@ GH_TOKEN="op://<vault>/github-pat-<repo>-sandbox/credential"
 docker-compose.override.yml     # already there if you use the skills mount
 ```
 
-## 5. The wrapper: `up.sh`
+## 5. The wrappers: `up.sh` and `shell.sh`
+
+Full copy-ready files, with the reasoning for every flag, are in [compose-and-git-wiring.md](compose-and-git-wiring.md). The split in one line each:
 
 ```sh
-#!/usr/bin/env sh
-# Start the sandbox with the repo-scoped GitHub token resolved from 1Password.
-# Any other way of starting the container (plain `docker compose up -d`) yields a
-# container WITHOUT a token — by design (compose drops unresolved env keys).
-set -eu
-cd "$(dirname "$0")"
-exec op run --env-file=.docker/sandbox.env -- docker compose up -d "$@"
+# up.sh — starts the container. No credential, idempotent, safe to run repeatedly.
+exec docker compose up -d "$@"
+
+# shell.sh — the ONLY door the token comes through, into this shell and its children.
+exec op run --env-file=.docker/sandbox.env -- docker exec -it -e GH_TOKEN <container> "$@"
 ```
 
-`chmod +x up.sh`. Run it from the project directory **without `-f`** so `docker-compose.override.yml` (the `GH_TOKEN` passthrough and the skills mount) is auto-loaded — the `-f` trap from `claude-code-docker-sandbox`.
+`chmod +x up.sh shell.sh`. Run them from the project directory **without `-f`** so `docker-compose.override.yml` (the skills mount) is auto-loaded — the `-f` trap from `claude-code-docker-sandbox`.
 
-What `op run` does (docs): "loads the specified secrets, then runs the provided command in a subprocess with the secrets made available as environment variables only for the duration of the process". The process here is `docker compose up -d`, which hands the value to the container at creation and exits; the container keeps its environment.
+What `op run` does (docs): "loads the specified secrets, then runs the provided command in a subprocess with the secrets made available as environment variables only for the duration of the process". Here that subprocess is the `docker exec` client, which forwards `GH_TOKEN` into the exec'd process by name; when the shell exits, the token is gone from the container entirely. Note the consequence: **an agent cannot re-open its own tokened shell** — `op` has no session in a non-interactive agent shell — which is the intended human checkpoint, not a bug to route around.
 
 Verify on the host without printing the value:
 
 ```sh
 op run --env-file=.docker/sandbox.env -- sh -c 'echo "GH_TOKEN length: ${#GH_TOKEN}"'
 ```
+
+Do **not** verify with `op run … -- env`: 1Password masks any output matching an injected secret, so the line reads `GH_TOKEN=<concealed by 1Password>` — exactly 24 characters, which looks like a truncated 93-character token. `echo ${#GH_TOKEN}` prints a number that can't match the secret, so it is not masked.
