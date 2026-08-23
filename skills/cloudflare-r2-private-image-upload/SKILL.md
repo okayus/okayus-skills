@@ -67,7 +67,7 @@ Platform ceilings that matter: request body ≤ **100 MB** on Free/Pro (so a 10 
 ```
 
 1. **Create the bucket on the host** (needs `wrangler login`; the sandbox has no credentials): `pnpm exec wrangler r2 bucket create <app>-photos` — optionally `--location apac` as a placement hint. Deploy performs an existence check, so the bucket must exist before the first deploy with the binding.
-2. **Token permission**: the `r2_buckets` binding needs `Account / Workers R2 Storage / Edit` on whatever token deploys — the GH Actions `CLOUDFLARE_API_TOKEN` (matrix in `cloudflare-api-token-permissions`) **or the Workers Builds custom build token**, whose recipe in `cloudflare-workers-builds-keyless-deploy` lists only Workers Scripts + D1 — extend it in place, don't regenerate. Missing it → `Authentication error [code: 10000]` on `/accounts/<id>/r2/buckets/<name>`.
+2. **Token permission**: the `r2_buckets` binding needs `Account / Workers R2 Storage / Edit` on whatever token deploys — the GH Actions `CLOUDFLARE_API_TOKEN` (matrix in `cloudflare-api-token-permissions`) **or the Workers Builds build token**. The token Workers Builds generates via *Create new token* already carries `Workers R2 Storage (edit)` (docs + dashboard notice, 2026-08-23 — see `cloudflare-workers-builds-keyless-deploy` 0.3.0); only an older or hand-made token may lack it — then extend it in place, don't regenerate. Missing it → `Authentication error [code: 10000]` on `/accounts/<id>/r2/buckets/<name>`.
 3. **Local dev is fully simulated** (Miniflare) — unlike the AI binding, an R2 binding does not force a remote session, so uploads work credential-free in the sandbox. Objects live under `.wrangler/state/v3/r2/<bucket_name>/` next to the D1 sqlite; the same `--persist-to .wrangler/state` rule from `cloudflare-workers-e2e-playwright` applies, otherwise `vite dev` and `wrangler dev --config dist/…` see two different buckets and uploads "disappear".
 4. Types: `PHOTOS_BUCKET: R2Bucket` in `Bindings` (global type via `wrangler types`).
 
@@ -144,7 +144,7 @@ R2 has **no point-in-time recovery**; bucket locks only *prevent* deletion/overw
 
 - **Trusting `file.type`** — it's client-controlled; a `.exe` renamed `.jpg` with `image/jpeg` passes an allowlist. Sniff the bytes, store the sniffed type
 - **`Content-Length` from the DB row** — after a re-upload or a cached transform the object size differs and the browser truncates or hangs. Use `obj.size`
-- **Token lacks `Workers R2 Storage: Edit`** — deploy/build fails with `code: 10000` on `/r2/buckets/<name>`; the keyless-deploy custom build token recipe doesn't include it
+- **Token lacks `Workers R2 Storage: Edit`** — deploy/build fails with `code: 10000` on `/r2/buckets/<name>`; the dash-generated Workers Builds token includes it (2026-08-23), a hand-made or older build token may not
 - **`Cache-Control: public` or `caches.default.put()` on an authenticated image** — cross-user leak at the edge. `private` only
 - **"Just make the bucket public for now"** — there is no "for now" for a URL that was shared once
 - **Images binding local-dev divergence** — low-fidelity offline in `wrangler dev`; quality/blur/format nuances only exist with `--remote` (credentials) or in prod
@@ -171,7 +171,7 @@ Write-back rule: when a bullet is confirmed or corrected, edit this section *and
 - UNVERIFIED: `delete(keys: string[])` accepting up to 1,000 keys in the current runtime — confirm the signature in the `wrangler types` output
 - UNVERIFIED: "R2 has no object versioning" is inferred from the absence of any versioning/PITR mention on the bucket-locks page (2026-08-22). Re-check https://developers.cloudflare.com/r2/ before the backup ADR
 - UNVERIFIED: the `rclone` + R2 S3 token backup sketch has never run in these projects; the env-var config form (`RCLONE_CONFIG_R2_*`) and the `Cloudflare` provider name need one successful dry run
-- UNVERIFIED: the Workers Builds custom build token needs the same `Workers R2 Storage: Edit` permission as a GH Actions token (verified only for the latter in `cloudflare-api-token-permissions`)
+- UNVERIFIED: an actual R2 deploy through Workers Builds — the generated build token lists `Workers R2 Storage (edit)` (docs and dashboard notice, 2026-08-23) but no R2-bound Worker has been deployed through it yet; the permission requirement itself is verified only for the GH Actions token in `cloudflare-api-token-permissions`
 - UNVERIFIED: `canvas.toBlob("image/jpeg")` inside the sandbox-baked headless Chromium (no GPU) — expected to work; the first e2e run settles it
 
 ## Scope boundary — what this skill does NOT cover
