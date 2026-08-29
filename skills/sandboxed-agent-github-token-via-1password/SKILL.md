@@ -5,7 +5,7 @@ license: MIT
 compatibility: Designed for Claude Code and similar agents. Host = Linux/macOS with the Docker Compose plugin, 1Password CLI (`op`) and a 1Password account; the claude-code-docker-sandbox layout (`.docker/`, `docker-compose.yml` + gitignored override, bind-mounted repo sharing `.git` with the host); the container image already has git + gh. Repo on GitHub owned by you (personal account, or an org you are a member of) — fine-grained PATs can't be used by outside collaborators.
 metadata:
   author: okayus
-  version: "0.2.2"
+  version: "0.2.3"
 ---
 
 # Sandboxed-agent GitHub token via 1Password (repo-scoped PAT, injected per shell)
@@ -148,7 +148,7 @@ A **bare key means the value never reached the `docker compose` process** — an
 - **Default — human merges.** `deny: Bash(gh pr merge *)`; the agent ends its work at "PR open, CI green, here is the URL". Reviewing and merging on the host is the governance step, exactly as with the relay without the trailer.
 - **Opt-in — agent-initiated merge.** Allow `Bash(gh pr merge --auto --squash *)` only; enable *Allow auto-merge* in the repo settings. `--auto` is the explicit, auditable signal (it shows in the PR timeline) and GitHub merges only once the ruleset's required checks pass — the same semantics the `Relay-Merge: yes` trailer had, minus the relay. Don't allow a bare `gh pr merge`, which merges immediately when checks already pass.
 - Either way the agent **cannot approve** its own PR (same account), so `required_approving_review_count` stays `0` for a solo repo — a required review would make every PR unmergeable by anyone.
-- Arming the opt-in needs two repo-side switches: *Allow auto-merge* in settings (`gh repo edit --enable-auto-merge`; public + Free plan is enough) and a ruleset with required checks on the base branch — GitHub offers auto-merge only on a PR that cannot merge immediately. Pair the allow with a written exception list in `CLAUDE.md` (matatabetai: PRs touching `drizzle/`, `.github/**`, `.claude/**`, `docs/adr/**` wait for the human). The boundary argument for allowing it at all: `--auto` adds nothing a compromised sandbox couldn't already do — the merge API was always one `PUT` away (threat model below); what changes is only the *cooperative* agent's blast radius, insured by the required checks.
+- Arming the opt-in needs two repo-side switches: *Allow auto-merge* in settings (`gh repo edit --enable-auto-merge`; public + Free plan is enough) and a ruleset with required checks on the base branch — GitHub offers auto-merge only on a PR that cannot merge immediately. **Without the ruleset, `gh pr merge --auto` never waits for CI** — it takes one of two paths, both wrong: if GitHub reports the PR as mergeable now (`mergeStateStatus` `CLEAN` / `UNSTABLE`), gh merges it **on the spot** with `autoMergeRequest` left `null` (matatabetai #13, okayus-skills #28, 2026-08-29); if mergeability is still being recomputed (`UNKNOWN`, e.g. seconds after another PR landed on `main`), gh sends the mutation and GitHub refuses with `GraphQL: Pull request Protected branch rules not configured for this branch (enablePullRequestAutoMerge)` (matatabetai #14, same day). So the ruleset is a hard prerequisite of the opt-in, not a nicety — write the allow into settings only after `gh ruleset check main` lists the required check. Pair the allow with a written exception list in `CLAUDE.md` (matatabetai: PRs touching `drizzle/`, `.github/**`, `.claude/**`, `docs/adr/**` wait for the human). The boundary argument for allowing it at all: `--auto` adds nothing a compromised sandbox couldn't already do — the merge API was always one `PUT` away (threat model below); what changes is only the *cooperative* agent's blast radius, insured by the required checks.
 
 ## The workflows gap — remove the need, not the guard
 
@@ -299,7 +299,7 @@ Also surfaced by the fix: `-it` hard-coded means `./shell.sh zsh -lc '…'` from
 
 ## Still open — confirm and write back
 
-- UNVERIFIED: `gh pr merge --auto --squash` with a fine-grained PAT — arming goes through the GraphQL `enablePullRequestAutoMerge` mutation; gh's GraphQL works with these tokens for `gh pr checks`, but the mutation itself is unexercised. matatabetai's first armed PR will say; write the result here.
+- UNVERIFIED: `gh pr merge --auto --squash` with a fine-grained PAT *when the ruleset makes the PR wait* — arming goes through the GraphQL `enablePullRequestAutoMerge` mutation; gh's GraphQL works with these tokens for `gh pr checks`, but the mutation itself is unexercised (the 2026-08-29 runs used the host's OAuth `gh` and hit the immediate-merge path, not the mutation). matatabetai's first armed PR after the rulesets exist will say; write the result here.
 - UNVERIFIED: the in-container service-account variant — the 1Password domains the egress firewall needs and the per-push request budget (the support page listing domains returned 403 to the fetch on 2026-08-22). See [references/service-account-variant.md](references/service-account-variant.md).
 - UNVERIFIED: whether an agent working inside a `./shell.sh` shell ever loses the token mid-session (it shouldn't — the variable is in its own process env), and what the recovery is when the human is away: the agent cannot re-open a tokened shell by itself, by design.
 
