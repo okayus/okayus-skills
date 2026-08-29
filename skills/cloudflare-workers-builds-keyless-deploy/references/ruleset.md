@@ -25,7 +25,8 @@ gh api repos/<owner>/<repo>/rulesets -X POST --input - <<'JSON'
         "dismiss_stale_reviews_on_push": false,
         "require_code_owner_review": false,
         "require_last_push_approval": false,
-        "required_review_thread_resolution": false
+        "required_review_thread_resolution": false,
+        "require_extra_approval_for_unattributed_changes": false
     }},
     { "type": "required_status_checks", "parameters": {
         "strict_required_status_checks_policy": false,
@@ -43,6 +44,14 @@ Notes:
   other integration can fake a passing "ci" status.
 - `required_approving_review_count: 0` suits a solo repo: merging is the human
   review. Raise it for teams.
+- `require_extra_approval_for_unattributed_changes: false` is spelled out because
+  GitHub defaults it to **true** when the key is omitted (seen in the create
+  response, 2026-08-29). A sandbox agent's commits are usually *unattributed*
+  (a made-up `…@users.noreply.github.com` that maps to no account), and on a solo
+  repo nobody can supply an "extra approval" for the owner's own PR. Observed on
+  matatabetai: with the default `true` such a PR still auto-merged at 0 approvals,
+  so the default did not bite — but the explicit `false` keeps that from depending
+  on GitHub's semantics.
 - `strict_required_status_checks_policy: false` = branch need not be up to date
   with main before merge (fine solo; consider `true`/merge queue for busy repos).
 - Companion setting worth enabling (merged-branch hygiene, esp. with a relay
