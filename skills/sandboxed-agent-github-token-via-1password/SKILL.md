@@ -5,7 +5,7 @@ license: MIT
 compatibility: Designed for Claude Code and similar agents. Host = Linux/macOS with the Docker Compose plugin, 1Password CLI (`op`) and a 1Password account; the claude-code-docker-sandbox layout (`.docker/`, `docker-compose.yml` + gitignored override, bind-mounted repo sharing `.git` with the host); the container image already has git + gh. Repo on GitHub owned by you (personal account, or an org you are a member of) — fine-grained PATs can't be used by outside collaborators.
 metadata:
   author: okayus
-  version: "0.2.4"
+  version: "0.2.5"
 ---
 
 # Sandboxed-agent GitHub token via 1Password (repo-scoped PAT, injected per shell)
@@ -160,6 +160,18 @@ Instead make the workflow yaml a **stable shell** that stops needing edits (mata
 - action `@vN` bumps arrive as Dependabot PRs (`package-ecosystem: github-actions`); `.github/dependabot.yml` sits **outside** `.github/workflows/`, so the token can push changes to it
 
 After this, "change what CI does" is a package.json edit from inside the sandbox; the yaml changes only when the pipeline's *shape* does. Honest accounting: CI behavior was agent-editable all along (the yaml already ran repo-controlled `pnpm` scripts), so the stable shell adds convenience, not exposure — the boundary (no `workflows` permission) stays exactly where it was.
+
+## Upgrading a repo already wired (0.2.x) — checklist
+
+Repos wired before 0.2.4 run the human-merge default with the node version and every CI step written into the yaml. Moving one to opt-in merge + stable-shell CI is one repo setting and two host-side PRs; done on matatabetai (#13 / #14, 2026-08-24), then kokemusu (#16 / #17) and mazuoboeru (#93 / #94) on 2026-08-29.
+
+0. **Verify the preconditions with the API, not from memory**: `gh ruleset check main` lists `pull_request` and `required_status_checks` (`ci`); `gh secret list` is empty (deploys are Workers Builds). If Actions still holds a secret, do the stable shell but keep human merge until it is gone — a `pull_request` run executes the PR branch's yaml with secrets available, before any review.
+1. `gh repo edit <owner>/<repo> --enable-auto-merge` (idempotent; public + Free is enough).
+2. **PR "stable shell"** (touches `.github/**` → a human pushes it): `.node-version` + `node-version-file`, a root `ci` script replacing the run steps (`pnpm run ci` is the only step left), `.github/dependabot.yml` for `github-actions`, and drop any `version:` under `pnpm/action-setup` (it duplicates `packageManager` and breaks the moment either moves). The PR's own CI validates it — `pull_request` runs the PR-side yaml.
+3. **PR "opt-in"**: `.claude/settings.json` — delete `Bash(gh pr merge *)` from `deny`, add `Bash(gh pr merge --auto --squash *)` to `allow`; `CLAUDE.md` — the merge rule plus the exception list (migrations, `.github/**`, `.claude/**`, `docs/adr/**`, "anything you'd hesitate over"); then every doc that repeats the deny list (dev-environment, ADR addendum, status hub). An agent editing its own permission rules is exactly what an auto-mode classifier blocks — expect to make that one edit by hand or through a tool call the human approves.
+4. **A live container session shares the checkout** (bind mount): switching branches in the repo directory pulls the working tree out from under it. Do host-side PRs in a `git worktree` (`git -C <repo> worktree add -b <branch> ../<repo>-wt origin/main`) and remove it afterwards.
+5. **Merge what was waiting.** Before the switch, PRs sit until a human merges them — kokemusu #15 (a production 500 fix) waited five days with the sandbox agent polling `gh pr view` for the merge. Clear the queue when you flip the policy.
+6. **First sandbox PR after the switch**: arm with `--auto --squash` right after `gh pr create`, while `ci` is still running — that is the path that exercises the `enablePullRequestAutoMerge` mutation with the fine-grained PAT (still UNVERIFIED below); an already-green PR merges immediately and proves nothing. Write the result under *Still open*.
 
 ## What a compromised sandbox can do now (be honest with yourself)
 
