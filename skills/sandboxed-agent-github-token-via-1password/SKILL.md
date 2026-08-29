@@ -5,7 +5,7 @@ license: MIT
 compatibility: Designed for Claude Code and similar agents. Host = Linux/macOS with the Docker Compose plugin, 1Password CLI (`op`) and a 1Password account; the claude-code-docker-sandbox layout (`.docker/`, `docker-compose.yml` + gitignored override, bind-mounted repo sharing `.git` with the host); the container image already has git + gh. Repo on GitHub owned by you (personal account, or an org you are a member of) — fine-grained PATs can't be used by outside collaborators.
 metadata:
   author: okayus
-  version: "0.2.1"
+  version: "0.2.2"
 ---
 
 # Sandboxed-agent GitHub token via 1Password (repo-scoped PAT, injected per shell)
@@ -148,6 +148,18 @@ A **bare key means the value never reached the `docker compose` process** — an
 - **Default — human merges.** `deny: Bash(gh pr merge *)`; the agent ends its work at "PR open, CI green, here is the URL". Reviewing and merging on the host is the governance step, exactly as with the relay without the trailer.
 - **Opt-in — agent-initiated merge.** Allow `Bash(gh pr merge --auto --squash *)` only; enable *Allow auto-merge* in the repo settings. `--auto` is the explicit, auditable signal (it shows in the PR timeline) and GitHub merges only once the ruleset's required checks pass — the same semantics the `Relay-Merge: yes` trailer had, minus the relay. Don't allow a bare `gh pr merge`, which merges immediately when checks already pass.
 - Either way the agent **cannot approve** its own PR (same account), so `required_approving_review_count` stays `0` for a solo repo — a required review would make every PR unmergeable by anyone.
+- Arming the opt-in needs two repo-side switches: *Allow auto-merge* in settings (`gh repo edit --enable-auto-merge`; public + Free plan is enough) and a ruleset with required checks on the base branch — GitHub offers auto-merge only on a PR that cannot merge immediately. Pair the allow with a written exception list in `CLAUDE.md` (matatabetai: PRs touching `drizzle/`, `.github/**`, `.claude/**`, `docs/adr/**` wait for the human). The boundary argument for allowing it at all: `--auto` adds nothing a compromised sandbox couldn't already do — the merge API was always one `PUT` away (threat model below); what changes is only the *cooperative* agent's blast radius, insured by the required checks.
+
+## The workflows gap — remove the need, not the guard
+
+The deliberate `workflows` gap eventually bites: a CI fix lands in `.github/workflows/**` and only the human can push it (matatabetai #12 — a deploy.yml pinning an old pnpm version that conflicted with `packageManager`). The tempting fix is granting the fine-grained **Workflows** permission. Don't, while anything in Actions holds secrets: a `pull_request`-triggered run executes the **PR branch's** yaml with repo secrets available, *before any human review* — and the permission also lets the agent rewrite the job behind the very `ci` check the ruleset requires for its merges.
+
+Instead make the workflow yaml a **stable shell** that stops needing edits (matatabetai #13):
+
+- steps only call files the token *can* push: a root `package.json` script (`"ci": "pnpm -r run check && pnpm -r run build"`; the yaml step is just `pnpm run ci`), repo scripts (hooks), and the node pin via `node-version-file: .node-version` — an `engines` range like `>=24` would float to future majors, a version file pins it, and the agent can edit the file
+- action `@vN` bumps arrive as Dependabot PRs (`package-ecosystem: github-actions`); `.github/dependabot.yml` sits **outside** `.github/workflows/`, so the token can push changes to it
+
+After this, "change what CI does" is a package.json edit from inside the sandbox; the yaml changes only when the pipeline's *shape* does. Honest accounting: CI behavior was agent-editable all along (the yaml already ran repo-controlled `pnpm` scripts), so the stable shell adds convenience, not exposure — the boundary (no `workflows` permission) stays exactly where it was.
 
 ## What a compromised sandbox can do now (be honest with yourself)
 
@@ -212,6 +224,15 @@ Runbooks, the relay-migration checklist and the threat model in full: [reference
   (every okayus project does) or pay for Pro before wiring the token; until then only the
   Claude Code denies and a pre-commit hook stand between the sandbox and `main`
   (matatabetai, 2026-08-23).
+- **Going public is only half the fix — the rulesets don't create themselves.** matatabetai
+  went public on 2026-08-23 *because of* the pitfall above, and a 2026-08-24 audit still found
+  `gh ruleset list` empty and `gh ruleset check main` reporting `0 rules apply`: the repo was
+  public with `main` guarded by nothing but the Claude Code denies and a pre-commit hook —
+  while the project's own docs (status hub, CLAUDE.md, roadmap) still said "private, ruleset
+  pending"; only the ADR recorded the flip. Two lessons: verify the boundary with the API
+  (`gh ruleset check main` must list the protect-main rules), never with memory or project
+  docs; and treat "flip visibility" + "create rulesets" as ONE step — the first without the
+  second changes nothing about the boundary, silently (matatabetai, 2026-08-24).
 
 ## Verified on mazuoboeru (2026-08-22, first application)
 
@@ -229,6 +250,7 @@ Confirmed on the real setup (okayus/mazuoboeru, PR #88):
 - Without the desktop-app integration, `eval $(op signin)` in the same terminal (30-minute session) followed by `./up.sh` was the working loop on Linux (0.2.0: the `op signin` now has to be in the terminal you run `./shell.sh` from); the integration itself has not been tried (both applications unlocked this way).
 - `Bash(git push *main)` blocks the refspec form: under bypass mode `claude -p` reported `git push origin HEAD:main` → `Permission … has been denied` (kokemusu, 2026-08-22); `HEAD:refs/heads/main` ends in `main` too and matches the same rule.
 - Second application, kokemusu (2026-08-22, a fresh public repo wired from the skill in one pass): identical results for push / PR / checks, the PR-less `main` push, the workflow rejection and the egress split; see pitfalls for the item-title collision and the `No commits between` and OAuth-expiry surprises.
+- Fourth data point, matatabetai (2026-08-24): the public flip had happened the day before, but the rulesets were never created — caught only by an audit (see the new pitfall). The opt-in merge policy was adopted: the human removed the `gh pr merge` deny by hand (an agent editing its own permission rules is exactly what an auto-mode classifier should and did block), `--auto --squash` went into the allow list, exceptions into `CLAUDE.md`; the workflows gap was closed by need-removal instead of permission (*The workflows gap* above).
 - Third application, matatabetai (2026-08-23, a **private** repo): wiring applied in one pass; the tokenless fail-closed start verified (the 0.1.0 startup echo, then worded `NOTE: GH_TOKEN absent`, in the log; helper present with a single `$GH_TOKEN`; `gh` not logged in — the current templates print `NOTE: no GitHub token in the container env by design …` / `NOTE: GH_TOKEN is unset …`). The token E2E waits for the PAT — and for the repo to go public, because the `main` ruleset is unenforced on a private Free-plan repo (pitfalls).
 
 ## Verified on kokemusu (2026-08-23) — the day that moved the injection point
@@ -277,6 +299,7 @@ Also surfaced by the fix: `-it` hard-coded means `./shell.sh zsh -lc '…'` from
 
 ## Still open — confirm and write back
 
+- UNVERIFIED: `gh pr merge --auto --squash` with a fine-grained PAT — arming goes through the GraphQL `enablePullRequestAutoMerge` mutation; gh's GraphQL works with these tokens for `gh pr checks`, but the mutation itself is unexercised. matatabetai's first armed PR will say; write the result here.
 - UNVERIFIED: the in-container service-account variant — the 1Password domains the egress firewall needs and the per-push request budget (the support page listing domains returned 403 to the fetch on 2026-08-22). See [references/service-account-variant.md](references/service-account-variant.md).
 - UNVERIFIED: whether an agent working inside a `./shell.sh` shell ever loses the token mid-session (it shouldn't — the variable is in its own process env), and what the recovery is when the human is away: the agent cannot re-open a tokened shell by itself, by design.
 
