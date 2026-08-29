@@ -5,7 +5,7 @@ license: MIT
 compatibility: Designed for Claude Code and similar agents. Targets Cloudflare Workers (wrangler.jsonc) + D1 + pnpm monorepos, GitHub repos. Requires gh CLI for ruleset setup; dashboard access for the one-time ceremony (a browser-automation agent can drive it — see references/dashboard-walkthrough.md).
 metadata:
   author: okayus
-  version: "0.3.0"
+  version: "0.3.1"
 ---
 
 # Cloudflare Workers Builds: Keyless Deploy
