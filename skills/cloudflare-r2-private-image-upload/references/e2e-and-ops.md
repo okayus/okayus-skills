@@ -56,20 +56,25 @@ test("photo: upload → visible → private → deleted", async ({ page, context
 
 Adapt the cookie name/value to the seam you use (`session` over http in e2e; `__Host-session` only exists over https). A 415 case (`setInputFiles` with `{ name: "x.txt", mimeType: "text/plain", buffer: Buffer.from("nope") }`) belongs in a **unit** test of `sniffImageType` and the route, not in Playwright.
 
-### Is the object really gone? (local R2 inspection — UNVERIFIED)
+### Is the object really gone? (local R2 inspection — verified 2026-09-01 in matatabetai, wrangler 4.125.0)
 
-R2 emulation persists under the same state root as D1. Expected (unconfirmed) layout and commands:
+R2 emulation persists under the same state root as D1:
 
 ```sh
-# list what the local emulator holds
+# blob bytes, one file per object (object metadata lives in the sibling
+# .wrangler/state/v3/r2/miniflare-R2BucketObject/*.sqlite)
 ls .wrangler/state/v3/r2/<bucket_name>/blobs/
 
-# fetch one object (exit code non-zero when missing)
+# fetch one object; a missing key exits 1 with "The specified key does not exist."
 pnpm exec wrangler r2 object get <bucket_name>/photos/<spaceId>/<recordId>/<id> \
   --local --persist-to .wrangler/state --file /tmp/out.bin
 ```
 
-Confirm both, note the wrangler version, and write the working form back here. Until then the e2e asserts the *route* is 404 and the unit test of the delete handler asserts `delete` was called with both keys (mock the bucket).
+In matatabetai the golden path uploads 2 photos (4 objects with thumbs), deletes one photo via the UI and the parent via record delete — after the run `blobs/` is empty, so both delete orderings physically remove objects. A simple `ls | wc -l` on the blobs dir is enough for the "really gone" check; the route-level 404 assertions stay in the spec itself.
+
+### Playwright trap: name the lightbox dialog something other than the file input's label
+
+A closed `<dialog>` still resolves in `getByLabel()`. If the upload input's label is 写真 and the lightbox is `<dialog aria-label="写真">`, `getByLabel("写真")` hits a strict-mode violation ("resolved to 2 elements") even though the dialog is closed. Give the dialog a distinct accessible name (e.g. 写真の拡大表示), found 2026-09-01 in matatabetai.
 
 ### Sandbox
 
