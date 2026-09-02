@@ -1,11 +1,11 @@
 ---
 name: cloudflare-workers-builds-keyless-deploy
-description: Deploy Cloudflare Workers from GitHub with ZERO Cloudflare credentials stored in GitHub (no CLOUDFLARE_API_TOKEN in Actions secrets), using Workers Builds — Cloudflare's git-connected CI/CD. Use when setting up or migrating a Workers project so that an autonomous agent pipeline never holds a Cloudflare secret, when asked "can we deploy without a CF API token in CI", or when driving the Cloudflare dashboard connect ceremony (by hand or with a browser agent). Covers the traps that cost hours — the custom token you made in My Profile NOT appearing in the build-token picker (use "Create new token" inside Advanced settings; it includes D1 Edit as of 2026-08 despite the docs), the picker defaulting to ANOTHER project's build token, Root directory hiding in the Advanced settings accordion (labelled "Path"), the first build after connecting being a manual build that posts NO "Workers Builds" check-run (not a missed trigger), preview builds sharing the PRODUCTION D1 database, Workers Builds NOT waiting for GitHub CI (gate with a branch ruleset instead), and skipping docs-only deploys with build watch paths.
+description: Deploy Cloudflare Workers from GitHub with ZERO Cloudflare credentials stored in GitHub (no CLOUDFLARE_API_TOKEN in Actions secrets), using Workers Builds — Cloudflare's git-connected CI/CD. Use when setting up or migrating a Workers project so that an autonomous agent pipeline never holds a Cloudflare secret, when asked "can we deploy without a CF API token in CI", or when driving the Cloudflare dashboard connect ceremony (by hand or with a browser agent). Covers the traps that cost hours — the custom token you made in My Profile NOT appearing in the build-token picker (use "Create new token" inside Advanced settings; it includes D1 Edit as of 2026-08 despite the docs), the picker defaulting to ANOTHER project's build token, Root directory hiding in the Advanced settings accordion (labelled "Path"), the *Create an app* wizard REFUSING the name of a Worker that already exists (connect from that Worker's own Settings → Builds instead — the exact case when migrating off GitHub Actions), the first build after connecting via the wizard being a manual build that posts NO "Workers Builds" check-run (not a missed trigger), preview builds sharing the PRODUCTION D1 database, Workers Builds NOT waiting for GitHub CI (gate with a branch ruleset instead), and skipping docs-only deploys with build watch paths.
 license: MIT
 compatibility: Designed for Claude Code and similar agents. Targets Cloudflare Workers (wrangler.jsonc) + D1 + pnpm monorepos, GitHub repos. Requires gh CLI for ruleset setup; dashboard access for the one-time ceremony (a browser-automation agent can drive it — see references/dashboard-walkthrough.md).
 metadata:
   author: okayus
-  version: "0.3.1"
+  version: "0.4.0"
 ---
 
 # Cloudflare Workers Builds: Keyless Deploy
@@ -45,15 +45,26 @@ git fetch origin && git ls-tree --name-only origin/main apps/web/wrangler.jsonc 
 gh pr list --state open                                                          # the skeleton PR must be merged, not open
 grep -n '"name"\|database_id' apps/web/wrangler.jsonc; wrangler d1 list           # name = the Worker name you will type; database_id = a real UUID that exists
 wrangler whoami                                                                   # the account the dashboard is logged into (the browser may run on another machine — only the account matters)
-wrangler deployments list                                                         # expect "This Worker does not exist" [code: 10007] — a pre-existing Worker of that name would be taken over
+wrangler deployments list                                                         # DECIDES THE ROUTE: "This Worker does not exist" [10007] → steps A; deployments listed → steps B
 ```
 
-**Steps** (dashboard as of 2026-08-23):
+**Two routes, and that last command decides which.** A Worker that does not exist yet is created by the *Create an app* wizard — **steps A**. A Worker that **already exists** — typically one you have been deploying with `wrangler deploy` from GitHub Actions, i.e. exactly the migration this skill is for — **cannot** go through that wizard: it validates the project name against existing Workers and refuses with *"A project with this name already exists. Choose a different name."* (この名前のプロジェクトはすでに存在します。別の名前を選択してください). Connect it from the Worker's own settings instead — **steps B**. Do **not** rename the Worker to get past the wizard: the name is its workers.dev hostname, and for a WebAuthn app that invalidates every registered passkey. (The wizard rejects at validation, before anything is created — no orphan token, no orphan Worker.)
+
+**Steps A — a Worker that does not exist yet** (dashboard as of 2026-08-23):
 
 1. **GitHub App scope**. Workers & Pages → Create → *Continue with GitHub*. If the *Cloudflare Workers and Pages* GitHub App is **already installed** on the GitHub account (from an earlier project), **no authorization screen appears** — the repository list shows straight away with whatever scope that installation has. To keep **Only select repositories**, manage it on GitHub (Settings → Applications → *Cloudflare Workers and Pages* → Repository access) **before** connecting; narrowing an existing *All repositories* installation touches every project built from that account, so list them first.
 2. **Setup dialog**. Project name = exactly `name` from wrangler.jsonc; build + deploy commands from the table below; **untick "Builds for non-production branches"** (it is in the dialog, ticked by default — no need to wait for Settings). Then **open the "Advanced settings" accordion** at the bottom: it hides three things — **Root directory** (labelled *Path*, default `/`), the **API token** picker, and build variables. In the picker choose **Create new token** and name it `<worker> Workers Builds`. **Do not leave the default**: the picker pre-selects the build token of whatever project you connected last (kokemusu's default was `nyalog Workers Builds`), which silently couples the two projects' deploy credentials.
 3. **Deploy**. Click *Deploy*: the Worker is created (two placeholder `Upload` deployments appear at once) and the **first build starts as a manual build** of the production branch HEAD — roughly 2 minutes (init ≈ 50 s, clone, install, build, migrate + deploy). A *Workers Paid* upsell modal appears — dismiss it. The build page's *Build settings* panel shows exactly what was saved (commands, root directory, token name) — confirm it there.
 4. **Settings → Builds afterwards**: confirm token and branch control, add **build watch paths** excludes (`docs/*`, `*.md`: type, Enter, then *Save* on the toast). Nothing else.
+
+**Steps B — a Worker that already exists** (matatabetai 2026-09-02). Workers & Pages → the Worker → **設定 / Settings** → right-hand nav **ビルド / Builds** → *Git リポジトリ* card → **接続 / Connect**. Same values as the table below, but the dialog differs from the wizard:
+
+1. **No project name field** — the Worker is already named, which is the point of this route. Repository and **本番ブランチ / Production branch** (`main`) come **pre-filled**; the build command loads a beat later (`読み込み中...` → `pnpm run build`).
+2. The branch tick-box is labelled **プレビュービルドを有効化 / Enable preview builds** (not *Builds for non-production branches*) and is **ticked** — untick it. Confirm by eye: the **非本番ブランチのデプロイ コマンド** field disappears when it is really off.
+3. **詳細設定 / Advanced settings** holds the same *Path* and API-token picker, plus a **ビルド キャッシュ / Build cache** toggle (off by default — leave it).
+4. In the picker, *Create new token* sits at the **top** of the list here (bottom in the wizard), and choosing it **pre-fills the token name** as `Workers Builds - <YYYY-MM-DD HH:MM>` — overwrite it with `<worker> Workers Builds`. The pre-selected default is still another project's token.
+5. **Connect starts no build.** The page returns with *"Git リポジトリにコミットをプッシュして最初のビルドを開始できるようになりました"* (push a commit to start the first build). So on this route the first build **is** push-triggered and **does** post a `Workers Builds: <worker>` check-run — the "first build is manual, no check-run" caveat applies to steps A only. Make that first push the commit that **deletes `deploy.yml`**: the old workflow is gone from the ref being pushed, so Actions does not deploy and the two pipelines never race.
+6. Then the same watch-path excludes as A4, on the page you are already on.
 
 **Dropped step — do not pre-create a custom token in My Profile.** The 0.2.0 recipe said to create a Workers Scripts + D1 + Account Settings + User Details + Memberships custom token first and "select it from the list". On 2026-08-23 that token **did not appear in the picker** at all (searched by name → "No labels found"); the picker listed only the dash-generated `<project> Workers Builds` tokens of other projects plus *Create new token* — even though the docs say you may "select one that you already own". If you already made one, delete it in My Profile → API Tokens: it is an unused token with Edit rights.
 
@@ -61,7 +72,7 @@ wrangler deployments list                                                       
 
 | Setting | Value | Trap if wrong |
 |---|---|---|
-| Worker/project name | exactly `name` from wrangler.jsonc | name mismatch → deploy creates a second Worker |
+| Worker/project name (steps A only) | exactly `name` from wrangler.jsonc | name mismatch → deploy creates a second Worker. If the name is *taken*, you are on the wrong route — use steps B |
 | Root directory (Advanced settings!, labelled *Path* in the setup dialog) | the package dir containing wrangler.jsonc, e.g. `apps/web` | commands run at repo root; build + deploy both fail. Also fails if the production branch doesn't contain that directory yet (unmerged skeleton PR) — a branch problem that looks like a settings problem |
 | Build command | `pnpm install --frozen-lockfile && pnpm run build` | explicit install guards monorepo lockfile auto-detection (lockfile lives at repo root, root directory doesn't); pnpm finds the workspace root upward automatically (log shows `Scope: all N workspace projects`) |
 | Deploy command | `pnpm exec wrangler d1 migrations apply <DB_NAME> --remote && pnpm exec wrangler deploy` | migrations must precede deploy; `pnpm exec` uses the repo-pinned wrangler |
@@ -87,7 +98,7 @@ wrangler d1 migrations list <DB> --remote  # "No migrations to apply!" = applied
 curl https://<worker>.<subdomain>.workers.dev/health
 ```
 
-**Right after the ceremony the production HEAD carries only the `ci` check-run.** The first build was a *manual* build and posts no `Workers Builds: <worker>` check — this is expected and is **not** the missed-trigger case below. The push → build path is proven only by the next commit to `main` (under the ruleset: a PR). Until then the evidence is the dashboard *Builds* tab plus `wrangler deployments list`, where the Workers Builds deploy shows `Source: Unknown (deployment)` and the two `Upload` entries created at the same minute are the Worker-creation placeholders.
+**After steps A the production HEAD carries only the `ci` check-run.** That first build was a *manual* build and posts no `Workers Builds: <worker>` check — expected, and **not** the missed-trigger case below. (Steps B starts no build at all, so its first build is already push-triggered and does post the check-run.) The push → build path is proven only by the next commit to `main` (under the ruleset: a PR). Until then the evidence is the dashboard *Builds* tab plus `wrangler deployments list`, where the Workers Builds deploy shows `Source: Unknown (deployment)` and the two `Upload` entries created at the same minute are the Worker-creation placeholders.
 
 Note: workers.dev URLs are always `<worker-name>.<account-subdomain>.workers.dev` — a bare `<name>.workers.dev` does not exist. If the account subdomain matters (OAuth redirect URIs, WebAuthn RP_ID), decide/rename it **before** registering those, since renaming changes every Worker URL in the account.
 
@@ -95,12 +106,23 @@ Build status lives in the **`Workers Builds: <worker>` check-run** above — tha
 
 ## Failure modes seen in the wild
 
+- **The wizard rejects the project name: "A project with this name already exists"** → the Worker already exists (you are migrating off `wrangler deploy`/Actions). Not a name you should change — leave the wizard and use **steps B** (the Worker's Settings → Builds → Git リポジトリ → Connect).
 - **"My custom token is not in the API token picker"** → expected as of 2026-08-23 (see *Dropped step*). Use *Create new token*; do not loop back to My Profile.
 - **Build fails immediately, weird path errors** → Root directory not set (it's *Path* inside Advanced settings) — or the production branch does not contain that directory yet (skeleton PR unmerged). Check `git ls-tree origin/main <root>/wrangler.jsonc` before touching settings.
 - **Build green until migration step, `Authentication error [code: 10000]`** → the selected build token lacks D1 Edit (another project's older token, or a generated token from before D1 was included). Add D1 Edit to the token in place, or switch to *Create new token* in Settings → Builds, then Retry **once**.
 - **First build green but no `Workers Builds:` check-run on GitHub** → the first build is manual; prove the trigger with a real push to `main` instead of re-running it.
 - **Nothing builds on push** → (a) push to a non-production branch with branch builds off (intended); (b) watch-paths excluded everything (see *Settings*); or (c) a **transient missed trigger** — even with a healthy connection, a production-branch merge, and watch-paths=`*`, Cloudflare occasionally creates **no build at all** for a commit. Diagnose with the commit's check-runs: a built commit carries a **`Workers Builds: <worker>`** check-run (app `cloudflare-workers-and-pages`); if only `ci` is present the build was **never triggered** — distinct from a *failed* check-run (built then failed). `gh api repos/<owner>/<repo>/commits/<sha>/check-runs --jq '.check_runs[].name'`. **Re-trigger by pushing a new commit to `main`** — retrying the latest build in the dashboard rebuilds *that* commit, not the missed one. (Don't read `commits/<sha>/status` `total_count:0` as "no signal" — Workers Builds & Actions both report via the Checks API, not legacy statuses.)
 - **Deploy succeeded but old code serves** → check `wrangler deployments list`; the dashboard build log tells you which commit was built.
+
+## Verified on matatabetai (2026-09-02) — the existing-Worker route
+
+Third application. Worker `matatabetai` (account subdomain `shiraoka`), pnpm monorepo, root directory `packages/web`, **already deployed by GitHub Actions** — the first time this skill met a Worker that existed.
+
+- Pre-flight was all green *by the 0.3.1 reading* (`deployments list` printed 10 deployments, which 0.3.1 called "would be taken over") — and the wizard still refused at the project-name field. That sentence was wrong; it now selects the route. Nothing was created by the refusal: the API-token picker afterwards still listed only the other projects' tokens.
+- Steps B connected on the first try. The saved panel survived a reload: root directory `packages/web`, production branch `main`, preview builds off, watch-path excludes `docs/*` + `*.md`, token `matatabetai Workers Builds`.
+- The generated token's permission notice (expanded before connecting) again included **D1 Storage (編集)** and **Workers R2 Storage (編集)**, plus KV, Vectorize, Queues, Pipelines, Containers, Cloudchamber, AI Search (edit), Connectivity Directory (read+bind), Workers routes on all zones, and user details + memberships (read). Both bindings this project needs were covered without touching My Profile.
+- The picker default was again another project's token (`kokemusu Workers Builds`) — third project, third time.
+- UNVERIFIED: the push-triggered build itself (the `deploy.yml`-deleting PR was still open at writing) — expect `Workers Builds: matatabetai` on that merge.
 
 ## Verified on kokemusu (2026-08-23) — and what is still open
 
