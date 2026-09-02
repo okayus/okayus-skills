@@ -5,7 +5,7 @@ license: MIT
 compatibility: Designed for Claude Code and similar agents. Targets Cloudflare Workers with Hono 4 + Drizzle ORM + D1 (SQLite) on the cloudflare-workers-deploy-skeleton stack (Vite + @cloudflare/vite-plugin, pnpm). Needs a session layer that sets c.var.userId — passkeys via cloudflare-workers-passkey-auth, or third-party OAuth. The invite-consuming transaction uses the raw D1 binding (env.DB.batch); Drizzle everywhere else. Requires wrangler CLI.
 metadata:
   author: okayus
-  version: "0.1.0"
+  version: "0.2.0"
 ---
 
 # Per-space membership + invite links on Cloudflare Workers
@@ -179,14 +179,19 @@ Seed an "other family" with fixed UUIDs in `global-setup.ts` (`INSERT OR IGNORE`
 
 Record outcomes in this section (PR to okayus-skills) and in the app's ADR.
 
-- UNVERIFIED: drizzle-orm `inArray(col, [])` — whether your pinned version throws or emits `false`. Keep the explicit empty guard regardless; note the observed behaviour here.
-- UNVERIFIED: drizzle's `db.batch()` on D1 exposing per-statement `meta.changes` (and `db.$client` as the raw binding, drizzle-orm ≥ 0.34). `registration.ts` takes the raw `D1Database` and uses `env.DB.batch`; if you port it to Drizzle, add a unit test proving the zero-row UPDATE is detectable.
-- UNVERIFIED: path (B) `POST /api/invites/accept` for an already-logged-in user is a design extension — routine-tasks shipped only (A). Test the `already_member` branch and a deliberate double-submit.
-- UNVERIFIED: carrying the invite in the signed `ChallengeState` cookie (`{ kind: "invite", uid, displayName, inviteId, spaceId }`) instead of client-echoed state is a hardening over routine-tasks, not yet run in production — confirm the cookie stays well under 4 KB and that `verify` ignores any `inviteId` in the body.
-- UNVERIFIED: Hono path params inside a middleware attached to a sub-app mounted with `api.route("/spaces/:spaceId", sub)` — routine-tasks runs this shape on Hono 4, but confirm `c.req.param("spaceId")` is populated with your pinned version.
-- UNVERIFIED: drizzle-kit emitting `CHECK` constraints for SQLite with your pinned version; if not, hand-edit the generated migration or accept a type-level enum and say so in the schema comment.
-- UNVERIFIED: D1 `batch()` rollback on a mid-batch constraint violation (e.g. duplicate `space_members` PK) — documented as transactional; prove it with a unit test before relying on it for compensation-free paths.
-- UNVERIFIED: the fragment-based invite link (`/#/invite?token=…`) survives your SPA router's initial redirect (hash vs history router) and LINE's in-app browser on iOS/Android. Verify on a real phone.
+- UNVERIFIED: the fragment-based invite link survives LINE's in-app browser on iOS/Android. matatabetai uses a history router with `/invite#token=…` and Chromium keeps the fragment through the SPA's initial load (verified 2026-08-30 in e2e) — verify on a real phone via LINE.
+
+### Verified 2026-08-30 in matatabetai (first production user of this skill)
+
+- drizzle-orm 0.45.2 `inArray(col, [])` emits `sql\`false\`` (`sql/expressions/conditions.js`) — no throw. Keep the explicit empty guard anyway; matatabetai avoids the question by putting `:spaceId` in the URL.
+- Raw `D1Database.batch()` on workerd exposes per-statement `meta.changes`; a 0-row `UPDATE … WHERE consumed_at IS NULL` returns `success: true, changes: 0`, so the race check as written detects the lost race. `db.$client` was not needed — pass `c.env.DB`.
+- D1 `batch()` rolls back the whole batch on a mid-batch constraint violation (a duplicate `users.id` as the 2nd statement raised `D1_ERROR: UNIQUE constraint failed` and the 1st INSERT was gone afterwards) — verified on workerd/miniflare; production D1 documents the same atomicity.
+- Path (B) `POST /api/invites/accept`: `already_member` (409, token not consumed) and a revoked token (`invite_invalid`) behave as specified; the same consumption batch is reused. Double-submit of a consumed token returns `invite_consumed` from `validateInvite` before the batch.
+- The invite state travels only in the signed challenge cookie (`{ kind: "invite", uid, displayName, inviteId, spaceId }`); the cookie is ~400 bytes, and `register/verify` reads nothing but `response` / `deviceName` from the body. The cookie payload is re-validated with a zod discriminated union after signature verification, so an unknown `kind` is rejected even with a valid signature.
+- Hono 4.13: a sub-app mounted with `protectedApi.route("/spaces/:spaceId", space)` whose `space.use("*", spaceMiddleware)` reads `c.req.param("spaceId")` gets the param populated (Hono merges sub-app routes into the parent with the prefixed path).
+- drizzle-kit 0.31.10 emits `CHECK` constraints for SQLite when the schema declares them with `check(name, sql\`…\`)` from `drizzle-orm/sqlite-core` (array-form extra config), and local D1 enforces them (`CHECK constraint failed: space_members_role_check`). No hand-editing of the migration needed — `references/schema.md` now uses `check()`.
+- Bootstrapping a drizzle-kit journal on a repo whose first migration was hand-written (`0000_init.sql` = `SELECT 1`): run `drizzle-kit generate --custom --name init` once against an **empty** schema file (creates `meta/0000_snapshot.json` + the journal entry, overwriting `0000_init.sql` — restore it from git), then `drizzle-kit generate --name <real>` against the real schema produces `0001_<real>.sql` with a consistent snapshot chain.
+- "One owned space per user" (`POST /api/spaces`) is race-safe without a table lock: `INSERT INTO spaces … SELECT ?,?,? WHERE NOT EXISTS (SELECT 1 FROM space_members WHERE user_id = ? AND role = 'owner')` followed by the membership `INSERT … SELECT … WHERE EXISTS (SELECT 1 FROM spaces WHERE id = ?)` in one batch; `meta.changes === 0` on the first statement → `409 already_owner`.
 
 ## Scope boundary — what this skill does NOT cover
 

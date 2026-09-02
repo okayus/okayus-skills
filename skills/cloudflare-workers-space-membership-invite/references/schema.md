@@ -6,7 +6,8 @@ Drizzle (`drizzle-orm/sqlite-core`) source first, then the SQL drizzle-kit shoul
 
 ```ts
 // worker/db/schema.ts
-import { index, primaryKey, sqliteTable, text, uniqueIndex } from "drizzle-orm/sqlite-core";
+import { sql } from "drizzle-orm";
+import { check, index, primaryKey, sqliteTable, text, uniqueIndex } from "drizzle-orm/sqlite-core";
 
 // Owned by cloudflare-workers-passkey-auth — keep a single definition, import it there.
 export const users = sqliteTable("users", {
@@ -33,11 +34,13 @@ export const spaceMembers = sqliteTable(
     role: text("role", { enum: ["owner", "member"] }).notNull(),
     createdAt: text("created_at").notNull(),
   },
-  (t) => ({
-    pk: primaryKey({ columns: [t.spaceId, t.userId] }),
+  (t) => [
+    primaryKey({ columns: [t.spaceId, t.userId] }),
     // sessionMiddleware runs `WHERE user_id = ?` on every request — index it.
-    userIdIdx: index("space_members_user_id_idx").on(t.userId),
-  }),
+    index("space_members_user_id_idx").on(t.userId),
+    // drizzle-kit 0.31 emits this CHECK for sqlite (verified 2026-08-30 in matatabetai)
+    check("space_members_role_check", sql`${t.role} IN ('owner', 'member')`),
+  ],
 );
 
 export const invites = sqliteTable(
@@ -61,10 +64,11 @@ export const invites = sqliteTable(
       .references(() => users.id, { onDelete: "cascade" }),
     createdAt: text("created_at").notNull(),
   },
-  (t) => ({
-    tokenHashUniq: uniqueIndex("invites_token_hash_uniq").on(t.tokenHash),
-    spaceIdIdx: index("invites_space_id_idx").on(t.spaceId),
-  }),
+  (t) => [
+    uniqueIndex("invites_token_hash_uniq").on(t.tokenHash),
+    index("invites_space_id_idx").on(t.spaceId),
+    check("invites_role_check", sql`${t.role} = 'member'`),
+  ],
 );
 
 // ---- Domain example (matatabetai). Parents carry space_id; children join through them. ----
@@ -169,7 +173,7 @@ CREATE INDEX meals_space_id_eaten_at_idx ON meals(space_id, eaten_at);
 -- tags / meal_tags analogous (see the Drizzle source above)
 ```
 
-The `CHECK` constraints: drizzle's `text(..., { enum })` is **type-level only** and emits no `CHECK`. Either add the constraint by hand to the generated migration SQL (the snapshot stays consistent because drizzle-kit does not diff CHECKs it did not create — UNVERIFIED for your pinned drizzle-kit) or accept that the enum is enforced by the application. routine-tasks wrote the migrations by hand with the `CHECK`s above.
+The `CHECK` constraints: drizzle's `text(..., { enum })` is **type-level only** and emits no `CHECK`. Declare them with `check(name, sql\`…\`)` in the table's extra config (array form, drizzle-orm ≥ 0.36) — drizzle-kit 0.31.10 emits `CONSTRAINT "…" CHECK(…)` in the generated SQL and local D1 enforces it (verified 2026-08-30 in matatabetai). routine-tasks wrote the migrations by hand with the `CHECK`s above.
 
 ## `ON DELETE` choices — why each one
 
