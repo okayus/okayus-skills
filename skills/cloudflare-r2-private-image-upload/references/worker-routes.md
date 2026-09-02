@@ -120,7 +120,7 @@ export function sniffImageType(head: Uint8Array): AllowedImageType | "image/heic
 }
 ```
 
-UNVERIFIED in the source projects (nyalog validates `file.type` only): confirm with real uploads from each family phone — a JPEG from iOS, a WebP from Android Chrome's share sheet, a renamed `.txt` → must be 415.
+Verified 2026-09-01 in matatabetai at the code level: unit tests cover all four signatures plus PDF / HTML / EXE / RIFF-but-WAV rejection, and e2e confirms a real headless-Chromium canvas JPEG passes end to end. Still pending: real uploads from each family phone — a JPEG from iOS, a WebP from Android Chrome's share sheet, a renamed `.txt` through the UI → must be 415.
 
 ## 5. Routes (`worker/routes/attachments.ts`)
 
@@ -279,7 +279,8 @@ export const attachmentRoutes = new Hono<Env>()
       "X-Content-Type-Options": "nosniff",
     });
     if (!("body" in obj)) {
-      // Precondition failed → R2Object without body. (UNVERIFIED in these projects; documented API.)
+      // Precondition failed → R2Object without body. (Verified 2026-09-01 in matatabetai:
+      // e2e fixes GET 200 + ETag, then GET with If-None-Match → 304, on local dev/Miniflare.)
       return new Response(null, { status: 304, headers });
     }
     headers.set("Content-Type", row.contentType); // validated at upload; don't trust the key or the client
@@ -326,9 +327,11 @@ const atts = await db
   .where(eq(attachments.recordId, record.id));
 const keys = atts.flatMap((a) => (a.thumbKey ? [a.r2Key, a.thumbKey] : [a.r2Key]));
 if (keys.length > 0) {
-  // Array form: one call for up to 1,000 keys (UNVERIFIED: confirm the signature in `wrangler types`).
-  // A per-key loop is N subrequests — and Workers Free allows 50 per invocation
-  // (UNVERIFIED whether R2 binding calls count toward that cap; the array form avoids the question).
+  // Array form: one call for up to 1,000 keys. Signature verified 2026-09-01 in matatabetai —
+  // `wrangler types` 4.125.0 emits `delete(keys: string | string[]): Promise<void>` (1,000-key
+  // ceiling itself still docs-only). A per-key loop is N subrequests — and Workers Free allows 50
+  // per invocation (UNVERIFIED whether R2 binding calls count toward that cap; the array form
+  // avoids the question).
   await c.env.PHOTOS_BUCKET.delete(keys);
 }
 await db.delete(records).where(eq(records.id, record.id)); // attachment rows cascade

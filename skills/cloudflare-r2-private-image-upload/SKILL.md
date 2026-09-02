@@ -5,12 +5,12 @@ license: MIT
 compatibility: Designed for Claude Code and similar agents. Targets Cloudflare Workers with Hono + Vite + @cloudflare/vite-plugin + Drizzle + D1 + a private R2 bucket (wrangler@^4, globals via `wrangler types`). Assumes a session middleware that sets `memberSpaceIds` (see cloudflare-workers-space-membership-invite) on top of cloudflare-workers-deploy-skeleton. Runs credential-free in a Docker sandbox because R2 is simulated locally; the optional Images binding is low-fidelity offline.
 metadata:
   author: okayus
-  version: "0.1.0"
+  version: "0.2.0"
 ---
 
 # Private R2 image upload, served through the Worker
 
-**Provenance**: extracted from nyalog (ADR-006 "medical images on R2 + Worker proxy", PRs #40–#42 — the attachment routes have run in production since 2026-05). Pricing and limits were re-verified against developers.cloudflare.com on **2026-08-22**; nyalog's ADR quoted a "25 GB / 5K writes" R2 free tier that was **wrong** — the real numbers are in the table below. This skill was written *ahead* of its second consumer (matatabetai meal photos), so the [Unverified claims](#unverified-claims--confirm-while-implementing-then-write-back) section lists exactly what that implementation must confirm and write back.
+**Provenance**: extracted from nyalog (ADR-006 "medical images on R2 + Worker proxy", PRs #40–#42 — the attachment routes have run in production since 2026-05). Pricing and limits were re-verified against developers.cloudflare.com on **2026-08-22**; nyalog's ADR quoted a "25 GB / 5K writes" R2 free tier that was **wrong** — the real numbers are in the table below. This skill was written *ahead* of its second consumer (matatabetai meal photos); that implementation landed 2026-09-01 (matatabetai PR #27, local dev + e2e — prod deploy pending R2 bucket creation) and confirmed several claims below.
 
 **Why this shape**: a family photo is private data. The moment a photo has a URL that works without a cookie (public bucket, `r2.dev`, signed URL pasted into chat) you have lost revocation. Keeping the bucket private and routing every byte through the Worker means the *same* session + space-membership check that guards the JSON API guards the pixels — and `<img src="/api/…">` on the same origin sends the session cookie for free, so nothing changes on the client, in the CSP, or in the auth model.
 
@@ -161,18 +161,18 @@ R2 has **no point-in-time recovery**; bucket locks only *prevent* deletion/overw
 
 Write-back rule: when a bullet is confirmed or corrected, edit this section *and* the reference that carries the code, add "(verified YYYY-MM-DD in <project>)", bump `metadata.version`, and ship it as `feat(r2-image-upload): … を還元`.
 
-- UNVERIFIED: magic-bytes sniffing is standard practice but **not battle-tested in the source projects** (nyalog checks only `file.type`). Confirm the JPEG/PNG/WebP/HEIF signatures against real phone uploads (including a WebP from Android Chrome) and that a renamed non-image is rejected with 415
-- UNVERIFIED: `get(key, { onlyIf: request.headers })` returning a body-less `R2Object` on `If-None-Match` match, and the resulting 304 path, have not been exercised in nyalog/routine-tasks. Check with `curl -H 'If-None-Match: <etag>'` against local dev and prod
+- PARTIALLY VERIFIED (2026-09-01 in matatabetai): the JPEG/PNG/WebP/HEIF signature code works — unit tests cover all four plus PDF/HTML/EXE/WAV rejection, and e2e confirms a real headless-Chromium canvas JPEG passes the sniff end to end. Still unverified: real *phone* uploads (a WebP from Android Chrome's share sheet, an iOS camera JPEG) and a renamed non-image through the actual UI
+- UNVERIFIED → VERIFIED (2026-09-01 in matatabetai, local dev/Miniflare): `get(key, { onlyIf: c.req.raw.headers })` returns a body-less `R2Object` on `If-None-Match` match; narrowing with `!("body" in obj)` → 304 works and is fixed in e2e (direct GET 200 + ETag, conditional GET 304). Not yet exercised against prod R2
 - UNVERIFIED: iOS Safari transcodes HEIC → JPEG when the picker is opened with `accept="image/*"` (and may send the original HEIC when `accept` lists `image/heic`). Test on a current iPhone with Camera → Formats → *High Efficiency*; record the iOS version
 - UNVERIFIED: `createImageBitmap(file, { imageOrientation: "from-image" })` orientation handling on current Safari and Firefox; test with a portrait photo from each family phone and note which browsers needed the `<img>`-decode fallback
 - UNVERIFIED: the Images binding's accepted input formats — whether HEIC input is supported (docs list max 20 MB input but no HEIC statement). Don't plan server-side HEIC transcoding until confirmed
-- UNVERIFIED: exact local inspection command and layout — `wrangler r2 object get <bucket>/<key> --local --persist-to .wrangler/state` and blobs under `.wrangler/state/v3/r2/<bucket_name>/`. Confirm the path and the exit code for a missing key (needed by the e2e "object really gone" assertion)
+- UNVERIFIED → VERIFIED (2026-09-01 in matatabetai, wrangler 4.125.0): blobs live under `.wrangler/state/v3/r2/<bucket_name>/blobs/` (object metadata in a sibling `.wrangler/state/v3/r2/miniflare-R2BucketObject/*.sqlite`); `wrangler r2 object get <bucket>/<key> --local --persist-to .wrangler/state --file <out>` exits **1** with `The specified key does not exist.` for a missing key. After the e2e run the blobs dir was empty — both delete paths physically remove objects
 - UNVERIFIED: whether R2 binding calls count toward the Workers Free 50-subrequest cap. If they do, the per-key `delete` loop is a real bug on large parent deletes; the array form sidesteps it either way
-- UNVERIFIED: `delete(keys: string[])` accepting up to 1,000 keys in the current runtime — confirm the signature in the `wrangler types` output
+- PARTIALLY VERIFIED (2026-09-01 in matatabetai): the signature exists — `wrangler types` 4.125.0 emits `delete(keys: string | string[]): Promise<void>`, and the array form works locally (e2e parent delete). The 1,000-key ceiling itself is still docs-only
 - UNVERIFIED: "R2 has no object versioning" is inferred from the absence of any versioning/PITR mention on the bucket-locks page (2026-08-22). Re-check https://developers.cloudflare.com/r2/ before the backup ADR
 - UNVERIFIED: the `rclone` + R2 S3 token backup sketch has never run in these projects; the env-var config form (`RCLONE_CONFIG_R2_*`) and the `Cloudflare` provider name need one successful dry run
 - UNVERIFIED: an actual R2 deploy through Workers Builds — the generated build token lists `Workers R2 Storage (edit)` (docs and dashboard notice, 2026-08-23) but no R2-bound Worker has been deployed through it yet; the permission requirement itself is verified only for the GH Actions token in `cloudflare-api-token-permissions`
-- UNVERIFIED: `canvas.toBlob("image/jpeg")` inside the sandbox-baked headless Chromium (no GPU) — expected to work; the first e2e run settles it
+- UNVERIFIED → VERIFIED (2026-09-01 in matatabetai): `canvas.toBlob("image/jpeg")` works in the sandbox-baked headless Chromium (no GPU) — the e2e golden path runs the real `createImageBitmap` → canvas → JPEG pipeline on a PNG fixture, the Worker sniffs `image/jpeg`, and the rendered `<img>` has `naturalWidth > 0`
 
 ## Scope boundary — what this skill does NOT cover
 
