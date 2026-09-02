@@ -5,7 +5,7 @@ license: MIT
 compatibility: Designed for Claude Code and similar agents. Targets Cloudflare Workers with Hono + Vite + @cloudflare/vite-plugin + Playwright, with either WebAuthn (passkey) auth via `@simplewebauthn` OR third-party OAuth (Google / GitHub, e.g. via `arctic`). Requires wrangler CLI. Assumes you already have a working Cloudflare Workers skeleton and a strict CSP middleware in place — if not, see `cloudflare-workers-deploy-skeleton` first.
 metadata:
   author: okayus
-  version: "0.2.1"
+  version: "0.3.0"
 ---
 
 # Cloudflare Workers + Playwright e2e (without the two silent traps)
@@ -160,6 +160,44 @@ E2E is for "configuration / wiring", not "domain semantics". The latter belongs 
 3. **Security headers (1-3 specs)**: `/`, an authenticated 401 path, and `/health` all carry the expected CSP / HSTS / X-Frame-Options / Referrer-Policy / X-Content-Type-Options. Catches `app.use("*", secureHeaders)` getting accidentally narrowed to `app.use("/api/*", ...)`. Scope note: assert the values your middleware emits **for the e2e scheme** — e2e runs on `http://127.0.0.1`, so scheme-keyed branches (a dev CSP over http, `__Host-` cookies / HSTS only over https) must be asserted in their http form.
 
 Total: 5 test cases across 3 specs is plenty for a 2-developer / family-scale project. Resist adding more — broader coverage belongs in unit tests, not slow brittle browser tests. See [references/test-scope-philosophy.md](references/test-scope-philosophy.md) for what each test is actually catching and why other ideas (multi-space switching UX, complete history, etc.) explicitly belong in later phases.
+
+## Keeping the golden path's locators stable as the UI grows
+
+The golden path is one spec that keeps getting longer as features land, and its page-wide
+locators break for reasons that have nothing to do with the feature under test. Two that
+cost real time (verified 2026-09-02 in matatabetai, adding a "recent dishes" suggestion
+strip to a form that sits above the list of the same records):
+
+**1. The same entity name now renders twice → strict mode violation.** `page.getByText("肉じゃが",
+{ exact: true })` passed for months, then a suggestion chip started rendering the same dish
+name above the feed and every assertion in the spec failed at once. Don't reach for `.first()`
+— that hides which one you meant. Name the containers and scope to them:
+
+```tsx
+<form aria-labelledby="mealFormHeading">   <h2 id="mealFormHeading">たべたものを記録</h2>
+<section aria-labelledby="feedHeading">    <h2 id="feedHeading">みんなの記録</h2>
+```
+```ts
+const form = page.getByRole("form", { name: "たべたものを記録" });   // named <form> → role=form
+const feed = page.getByRole("region", { name: "みんなの記録" });     // named <section> → role=region
+await expect(feed.getByText("肉じゃが", { exact: true })).toBeVisible();
+```
+
+An unnamed `<section>` has no role at all, so this costs one `aria-labelledby` per landmark —
+and it makes the page navigable by landmark for screen readers, which you wanted anyway.
+
+**2. Accessible names get a space at every element boundary.** The common pattern of appending
+a visually-hidden qualifier to a short label —
+
+```tsx
+<button>削除<span className="visually-hidden">（{meal.name}）</span></button>
+```
+
+— computes to `削除 （カレー）`, **not** `削除（カレー）`, so `getByRole("button", { name: "削除（カレー）" })`
+waits forever. In CJK UIs there is no other whitespace to hint at this. Use a regex
+(`{ name: /削除.*カレー/ }`) rather than trying to guess the joiner, and when a locator times out
+on a name you are sure is on screen, read the ARIA snapshot in the failure's
+`error-context.md` — it prints the computed name and settles it in seconds.
 
 ## CI: don't run e2e in CI (initially)
 
