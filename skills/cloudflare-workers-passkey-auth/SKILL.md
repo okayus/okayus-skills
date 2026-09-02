@@ -5,7 +5,7 @@ license: MIT
 compatibility: Designed for Claude Code and similar agents. Targets Cloudflare Workers with Hono 4 + Drizzle ORM on D1, @simplewebauthn/server + @simplewebauthn/browser ^13 (WebCrypto, no nodejs_compat), hono/jwt + hono/cookie, a React SPA served by the same Worker via @cloudflare/vite-plugin, wrangler 4, pnpm. Assumes the cloudflare-workers-deploy-skeleton baseline. Users need modern browsers with platform authenticators (iOS / Android / desktop passkeys).
 metadata:
   author: okayus
-  version: "0.2.0"
+  version: "0.2.1"
 ---
 
 # Cloudflare Workers Passkey Auth (closed registration, revocable sessions)
@@ -187,6 +187,14 @@ Record each result in the section named; delete the bullet once it's confirmed o
 - `wrangler types` (wrangler 4.125) also emits the keys of a local `.dev.vars` into the generated `Env` as `string`. CI has no `.dev.vars`, so type the secrets yourself and intersect: `type Bindings = Env & { SESSION_SECRET: string; INITIAL_REGISTRATION_TOKEN?: string; DEV_BYPASS_USER_ID?: string }` — consistent in both environments.
 - `@cloudflare/vite-plugin@1.53` copies `.dev.vars` into `dist/<worker>/.dev.vars` at build time, so `wrangler dev --config dist/<worker>/wrangler.json` picks up the dev `ORIGIN` — pass `--var ORIGIN:… --var RP_ID:… --var SESSION_SECRET:… --var INITIAL_REGISTRATION_TOKEN:…` for the e2e server to make the values explicit.
 - Client side, `@simplewebauthn/browser` is optional: matatabetai calls the browser JSON API directly (`PublicKeyCredential.parseCreationOptionsFromJSON` / `parseRequestOptionsFromJSON` + `credential.toJSON()`, Baseline since 2025-03; `modern-web-guidance` recommends this over wrapper libraries) with the server's `PublicKeyCredentialCreationOptionsJSON` / `RegistrationResponseJSON` imported as **types** from `@simplewebauthn/server`. The DOMException mapping is the same (`NotAllowedError` / `InvalidStateError` / `SecurityError` / `NotSupportedError`), and the Signal API (`signalUnknownCredential` on login 404, `signalAllAcceptedCredentials` on the device list, `signalCurrentUserDetails` on rename) is feature-detected.
+
+### Verified 2026-09-01 in kokemusu (single-user variant, second production user)
+
+- **Single-user twist** (no spaces, no invites): `register/verify` adds a credential to the existing `user` row when one exists instead of minting a user — the same token-gated door then serves all-passkeys-lost recovery and a future `RP_ID` change without orphaning that user's rows. `register/begin` decides the `uid` (existing row's id, else a fresh UUID) and signs it into the challenge state, so a retried verify can never create a second user. Two devices registered in production, `INITIAL_REGISTRATION_TOKEN` deleted afterwards.
+- **The `__Host-` deletion throw reached production unseen** (kokemusu #15): vite dev, unit tests and e2e all run on http, where cookie names are bare and hono's prefix check never fires; the first https verify was a 500. Keep **one unit test per cookie-clearing path with an https `ORIGIN`** (`app.request(...)` with `ORIGIN: "https://…"` reproduces the throw in Node) and route every deletion through a single `clearCookie(c, name)` that derives `secure` from `ORIGIN` — `deleteCookie` is then called in exactly one place.
+- **`wrangler secret put` reads the value from stdin and prints nothing**, and secrets cannot be read back — `openssl rand -hex 32 | wrangler secret put INITIAL_REGISTRATION_TOKEN` stores a token nobody has ever seen (kokemusu 2026-09-01, had to mint again). Mint in two steps: print, then paste at the prompt. `references/ops-and-recovery.md` is corrected; a pipe stays fine for `SESSION_SECRET`, which no human needs to see.
+- The wrangler 4 top-level `ratelimits` binding on `register|login/begin|verify` is **simulated locally** (40-burst → 429s after 30, credential-free container, both `vite dev` and `wrangler dev`), so the fail-open middleware can be exercised in dev; e2e still strips it (`playwright-e2e-in-docker-sandbox`).
+- The e2e golden path (CDP virtual authenticator, in-container) covers register → reload → logout → login on this variant: `cloudflare-workers-e2e-playwright` 0.4.0.
 
 ## Scope boundary — what this skill does NOT cover
 

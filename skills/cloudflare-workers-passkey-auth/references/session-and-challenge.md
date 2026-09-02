@@ -106,7 +106,8 @@ export async function consumeChallenge(
   deleteCookie(c, name, cookieBase(c)); // same attrs as set: __Host- needs Secure even to delete
   if (!token) return null;
   try {
-    // hono/jwt verify checks the signature and `exp` (UNVERIFIED in SKILL.md — unit-test it).
+    // hono/jwt verify checks the signature and rejects an expired `exp` itself
+    // (JwtTokenExpired; verified hono 4.13 in matatabetai and kokemusu — keep a unit test).
     const p = (await verify(token, c.env.SESSION_SECRET, "HS256")) as Payload;
     if (p.aud !== AUD) return null;
     return { challenge: p.challenge, state: p.state };

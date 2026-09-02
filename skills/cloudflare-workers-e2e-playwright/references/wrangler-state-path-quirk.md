@@ -78,6 +78,27 @@ A safer default would be "use cwd unless `--persist-to` is explicit". But the cu
 
 But don't co-locate this with `pnpm dev` on the same port — Vite dev still has the CSP trap. Pick one or the other; document the choice in `e2e/README.md`.
 
+## Variant: a dedicated e2e state dir (kokemusu, 2026-09-02)
+
+The invariant is **"every command that touches the e2e database resolves the same sqlite"**, not the literal `.wrangler/state`. Pointing everything at `--persist-to .wrangler/e2e` instead satisfies it and adds a property: a run can wipe its database without touching the `pnpm dev` state (registered passkeys, real-looking posts) that lives in `.wrangler/state`.
+
+```ts
+// e2e/env.ts
+export const E2E_PERSIST_DIR = ".wrangler/e2e";
+// e2e/helpers/db.ts — every call hardcodes --local and the dir
+wrangler(["d1", "migrations", "apply", "<db>", "--local", "--persist-to", E2E_PERSIST_DIR]); // globalSetup, idempotent
+wrangler(["d1", "execute", "<db>", "--local", "--persist-to", E2E_PERSIST_DIR, "--command", sql]);
+```
+```json
+"e2e:server": "pnpm build && node e2e/prepare-config.ts && wrangler dev --config dist/<bundle>/wrangler.json --persist-to .wrangler/e2e --ip 127.0.0.1 --port 5183"
+```
+
+The migrations dir and `database_id` come from the same derived config in both cases, so the sqlite file name (a hash of the database id) matches. First run creates the directory. `wrangler d1 execute --json` on the same dir is also how the golden path asserts what is **at rest** (an encrypted `k1.…` envelope, never the plaintext) without going through the API.
+
+## The same config-relative rule applies to `.dev.vars`
+
+`@cloudflare/vite-plugin` 1.x copies `.dev.vars` into `dist/<bundle>/.dev.vars`, and wrangler reads `.dev.vars` from the config's directory (`path.resolve(dirname(configPath), ".dev.vars")` in `wrangler-dist/cli.js`). With `--config dist/<bundle>/wrangler.json` the e2e server therefore inherits the developer's `DEV_CSP=1` and dev `ORIGIN` unless the prepare step deletes the copy (and writes the e2e values into `cfg.vars`) or every key is passed with `--var` (CLI wins; measured `--var` > `.dev.vars` > `vars`, wrangler 4.125).
+
 ## Generalizable lesson
 
 **State persistence paths are a common source of "works in some commands, not others" bugs in monorepos / multi-stage build setups.** Whenever a tool defaults to "relative to <X>", check what X is for each invocation. Differences between invocations of the same tool (with vs without `--config`, with vs without `--cwd`, run from different directories) silently use different state.

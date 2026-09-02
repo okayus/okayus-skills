@@ -65,6 +65,39 @@ build:
 docker compose down && docker compose build && docker compose up -d
 ```
 
+### The variant both production users run (matatabetai 2026-08-22, kokemusu 2026-09-02)
+
+Same five details, different mechanics — verified end to end in two projects on `node:24`
+with playwright 1.62.1 (kokemusu: `docker compose build` ≈ 3 min, +0.4 GB, 10 e2e tests
+green). Libraries as an explicit apt list in the root layer, the browser installed **as
+`node`** so it lands in `/home/node/.cache/ms-playwright` and needs no shared path or
+`chmod`; `fonts-noto-cjk` because a Japanese UI otherwise renders tofu in failure
+screenshots:
+
+```dockerfile
+# root layer, right after the base apt-get block
+ARG INSTALL_PLAYWRIGHT=false
+RUN if [ "$INSTALL_PLAYWRIGHT" = "true" ]; then \
+  apt-get update && apt-get install -y --no-install-recommends \
+  libnss3 libnspr4 libatk1.0-0 libatk-bridge2.0-0 libcups2 libdrm2 libxkbcommon0 \
+  libatspi2.0-0 libxcomposite1 libxdamage1 libxfixes3 libxrandr2 libgbm1 libasound2 \
+  libpango-1.0-0 libcairo2 fonts-liberation fonts-noto-color-emoji fonts-noto-cjk \
+  && apt-get clean && rm -rf /var/lib/apt/lists/* ; \
+  fi
+
+# later, as USER node (after the global npm install of claude)
+# PLAYWRIGHT_VERSION MUST equal @playwright/test in package.json (exact pin, bump both).
+ARG PLAYWRIGHT_VERSION=1.62.1
+RUN if [ "$INSTALL_PLAYWRIGHT" = "true" ]; then \
+      npx -y playwright@${PLAYWRIGHT_VERSION} install chromium ; \
+    fi
+ENV PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1
+```
+
+`docker-compose.yml` opts in with `INSTALL_PLAYWRIGHT: "true"` and `PLAYWRIGHT_VERSION:
+"1.62.1"` next to each other, so the pin is visible where the build is configured. Bake
+output to expect: `chromium-<rev>/`, `chromium_headless_shell-<rev>/`, `ffmpeg-<rev>/`.
+
 ### The five details that matter
 
 1. **`PLAYWRIGHT_BROWSERS_PATH=/ms-playwright` + `chmod -R a+rX`.** The install runs as
@@ -136,9 +169,13 @@ Cloudflare resource. In a credential-free sandbox (or on a logged-out host) the
 auth/egress handshake for that remote resource never completes, and it blocks the request
 pipeline — so the Worker is "Ready" yet returns nothing.
 
-Wrangler **4.36+** expresses the same limiter as a top-level `ratelimits` key instead.
-Whether the native v4 binding hangs local dev the same way is **not documented** — strip
-it too; rate limiting is out of e2e scope either way, so nothing of value is lost.
+Wrangler **4.36+** expresses the same limiter as a top-level `ratelimits` key instead, and
+**that form is simulated locally** — verified 2026-09-02 in kokemusu (wrangler 4.125.0,
+credential-free container): under `vite dev` a 40-request burst against `simple: { limit:
+30, period: 60 }` answered 26×200 + 14×429, and under `wrangler dev --config dist/…` 29×200
++ 11×429 — no hang, no `connected to remote resource` line. Strip it anyway: rate limiting
+is out of e2e scope, and a live limiter means a burst of e2e requests (or a retried run)
+can 429 your own auth routes.
 
 **Fix.** Strip the rate-limit keys from the **built** config before serving it for e2e.
 The limiter is fail-open and rate limiting is out of e2e scope (test it separately — see
@@ -149,7 +186,7 @@ correct and keeps the run credential-free:
 // e2e/prepare-config.ts — post-build, pre-`wrangler dev`, editing dist/<bundle>/wrangler.json
 const cfg = JSON.parse(readFileSync(CONFIG, "utf8"));
 delete cfg.unsafe;      // wrangler 3.x ratelimit binding (observed to hang credential-free)
-delete cfg.ratelimits;  // wrangler 4.36+ top-level form (local behavior undocumented)
+delete cfg.ratelimits;  // wrangler 4.x top-level form — simulated locally (verified 4.125.0), stripped for independence
 writeFileSync(CONFIG, JSON.stringify(cfg, null, 2));
 ```
 
@@ -197,6 +234,23 @@ cfg.dev = { ...(cfg.dev ?? {}), ip: "127.0.0.1" };
 
 If you ever see e2e requests hang at connect-but-no-response, this and Trap 1 are the two
 suspects — check the bind address first (cheaper to rule out).
+
+## Also config-relative: the `.dev.vars` copy in `dist/`
+
+`@cloudflare/vite-plugin` 1.x (verified 1.53) copies `apps/web/.dev.vars` to
+`dist/<worker>/.dev.vars` at build time, and wrangler resolves `.dev.vars` **relative to
+the directory of the config it was given** (`path.resolve(dirname(configPath),
+".dev.vars")` in `wrangler-dist/cli.js`). So `wrangler dev --config dist/<worker>/wrangler.json`
+silently runs with the developer's values: `DEV_CSP=1` relaxes the CSP your security spec
+asserts, `ORIGIN=http://localhost:5273` 403s every POST via the CSRF check and fails
+WebAuthn verify with `challenge_mismatch`. Two verified ways out (kokemusu 2026-09-02):
+
+- `prepare-config.ts` deletes the copy and writes the e2e values into `cfg.vars` (one
+  source of truth in `e2e/env.ts`, nothing on the command line), or
+- pass every key with `--var KEY:value` — the CLI outranks the copy (`--var RP_ID:vartest`
+  shows up as `rpId` in `login/begin` with the copy present). matatabetai does this.
+
+Precedence measured: `--var` > `.dev.vars` next to the config > `vars` in the config.
 
 ## See also
 

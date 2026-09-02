@@ -133,3 +133,60 @@ Future contributors who skip the README will rediscover the traps the hard way; 
 | `Could not find migrations directory` | Running wrangler dev from wrong cwd. Confirm `pnpm e2e:server` runs from package root. |
 
 These six covers ~95% of confused-on-Slack questions for this kind of setup.
+
+## Variant (kokemusu, 2026-09-02): dedicated state dir, `env.ts` + `prepare-config.ts`, type-checked specs
+
+Same config shape, three additions that removed a class of "works on my machine" problems:
+
+```json
+// package.json (apps/web)
+"check": "pnpm run types && tsc --noEmit && tsc --noEmit -p tsconfig.e2e.json",
+"e2e": "playwright test",
+"e2e:server": "pnpm build && node e2e/prepare-config.ts && wrangler dev --config dist/kokemusu/wrangler.json --persist-to .wrangler/e2e --ip 127.0.0.1 --port 5183"
+```
+
+```jsonc
+// tsconfig.e2e.json — CI type-checks the specs even though e2e never runs there
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": { "types": ["node"], "allowImportingTsExtensions": true },
+  "include": ["e2e/**/*", "playwright.config.ts"]
+}
+```
+
+```ts
+// e2e/env.ts — the one place the run agrees on (imported by the config, the specs, the helpers, and prepare-config)
+export const E2E_PORT = 5183;
+export const E2E_ORIGIN = `http://localhost:${E2E_PORT}`;   // browser + ORIGIN var, byte-identical (CSRF, expectedOrigin)
+export const E2E_BIND_IP = "127.0.0.1";                      // the bind only — RP ID needs a domain name
+export const E2E_PERSIST_DIR = ".wrangler/e2e";              // never the pnpm dev state
+export const E2E_INITIAL_REGISTRATION_TOKEN = "e2e-initial-token";
+export const E2E_VARS = { RP_ID: "localhost", ORIGIN: E2E_ORIGIN, SESSION_SECRET: "…32+ chars…", INITIAL_REGISTRATION_TOKEN: E2E_INITIAL_REGISTRATION_TOKEN /* + app secrets, test-only values */ } as const;
+```
+
+```ts
+// e2e/prepare-config.ts — plain `node e2e/prepare-config.ts` (Node ≥ 23.6 strips types; hence the ".ts" specifier,
+// allowed by allowImportingTsExtensions above). Edits the DERIVED config only; `pnpm build` regenerates it.
+import { existsSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
+import { E2E_BIND_IP, E2E_PORT, E2E_VARS } from "./env.ts";
+
+const bundleDir = fileURLToPath(new URL("../dist/kokemusu/", import.meta.url));
+const configPath = `${bundleDir}wrangler.json`;
+const cfg = JSON.parse(readFileSync(configPath, "utf8")) as Record<string, unknown>;
+delete cfg["ratelimits"]; delete cfg["unsafe"];                                            // sandbox skill Trap 1
+cfg["dev"] = { ...(cfg["dev"] as Record<string, unknown> | undefined), ip: E2E_BIND_IP, port: E2E_PORT }; // Trap 2
+cfg["vars"] = E2E_VARS;                                                                    // replaces the production RP_ID/ORIGIN
+writeFileSync(configPath, `${JSON.stringify(cfg, null, 2)}\n`);
+const copiedDevVars = `${bundleDir}.dev.vars`;                                             // Trap 2b: the vite plugin copied it here
+if (existsSync(copiedDevVars)) rmSync(copiedDevVars);
+```
+
+`playwright.config.ts` imports `E2E_ORIGIN` for `baseURL` and `webServer.url` (`/health`), keeps `reuseExistingServer: true`, and passes `launchOptions: process.env["DEVCONTAINER"] ? { args: ["--no-sandbox"] } : {}`. `globalSetup` = `applyMigrations()` + `resetDb()` against `E2E_PERSIST_DIR`.
+
+Two rows to add to the README pitfalls table:
+
+| Symptom | Likely cause |
+|---|---|
+| The request after a rejected POST is `500 Network connection lost`, then `wrangler dev` exits | That POST carried a body the Worker never read (401/403 before `c.req.json()`). Drop the body from the spec — Trap 3 in SKILL.md. |
+| Relaxed CSP / 403 on every POST / `challenge_mismatch` although `vars` look right | `dist/<bundle>/.dev.vars` (copied by the vite plugin) is overriding them — delete it in the prepare step or pass `--var`. |

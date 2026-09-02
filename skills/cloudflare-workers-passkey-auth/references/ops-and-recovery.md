@@ -35,9 +35,12 @@ e2e vars (per `cloudflare-workers-e2e-playwright`): `RP_ID=localhost`, `ORIGIN` 
 ## Bootstrap the first user (initial registration token cycle)
 
 ```bash
-# 1. mint + store the one-shot secret
-openssl rand -hex 32 | pnpm exec wrangler secret put INITIAL_REGISTRATION_TOKEN
-# 2. hand the printed value to the first user out-of-band (in person / a chat you control)
+# 1. mint + store the one-shot secret — TWO steps, never a pipe: `wrangler secret put` reads
+#    the value from stdin and prints nothing, and secrets cannot be read back, so a piped
+#    value is one nobody has ever seen (kokemusu 2026-09-01: had to mint again)
+openssl rand -hex 32                                       # copy the printed value
+pnpm exec wrangler secret put INITIAL_REGISTRATION_TOKEN   # paste it at the prompt
+# 2. hand that value to the first user out-of-band (in person / a chat you control)
 #    → they open the app, "Register", enter display name + token → passkey sheet → logged in
 # 3. close the door immediately
 pnpm exec wrangler secret delete INITIAL_REGISTRATION_TOKEN
@@ -55,7 +58,7 @@ Rules:
 Consequences: every session JWT and every pending challenge cookie fails verification → everyone is logged out, and the `sessions` rows become orphans.
 
 ```bash
-openssl rand -hex 32 | pnpm exec wrangler secret put SESSION_SECRET
+openssl rand -hex 32 | pnpm exec wrangler secret put SESSION_SECRET   # a pipe is fine here: no human ever needs this value
 pnpm exec wrangler d1 execute <db> --remote --command "DELETE FROM sessions"
 ```
 
@@ -66,7 +69,7 @@ No passkey is affected — credentials are bound to `RP_ID`, not to the secret.
 Two options, cheapest first.
 
 **A. Re-open the initial token (no code)** — routine-tasks ADR-0002 runbook:
-1. `openssl rand -hex 32 | wrangler secret put INITIAL_REGISTRATION_TOKEN`
+1. `openssl rand -hex 32` (copy the value), then `wrangler secret put INITIAL_REGISTRATION_TOKEN` and paste it — two steps, never a pipe (see the bootstrap section above)
 2. The person registers again → this creates a **new** `users` row (and, with spaces, a new space with them as owner).
 3. `wrangler secret delete INITIAL_REGISTRATION_TOKEN`.
 4. Re-attach them to the family space: an existing owner issues an invite and they accept it from the new account, or you `INSERT INTO space_members` by hand. Rows they created earlier keep pointing at the old `user_id` (`created_by` is audit data, not authorization — sibling skill), so nothing is lost; the old user row can stay or be deleted (`DELETE FROM users WHERE id = ?` cascades its dead credentials/sessions).

@@ -1,11 +1,11 @@
 ---
 name: playwright-e2e-in-docker-sandbox
-description: Run a Playwright e2e suite fully inside a network-isolated Docker sandbox (the claude-code-docker-sandbox setup — egress firewall, no host browser, no Cloudflare login) with zero runtime egress and zero credentials. The move — bake Chromium into the image at build time (build runs before the firewall), so the runtime allowlist needs no new entry. Use when e2e must run in-container (Playwright CDN blocked, `browser not found`), or when a credential-free `wrangler dev` accepts TCP but every request hangs — the two sandbox-only traps are a rate-limit binding (wrangler 3.x `unsafe` form or the v4 top-level `ratelimits` key) proxying to a remote Cloudflare resource whose handshake never completes without credentials, and a `localhost` bind stalling on IPv4/IPv6 dual-stack resolution (bind `--ip 127.0.0.1` end to end). Covers the Dockerfile bake block, `--no-sandbox` gated on DEVCONTAINER, exact version pinning (a blocked CDN can't self-heal drift), and stripping rate limits from the built e2e config.
+description: Run a Playwright e2e suite fully inside a network-isolated Docker sandbox (the claude-code-docker-sandbox setup — egress firewall, no host browser, no Cloudflare login) with zero runtime egress and zero credentials. The move — bake Chromium into the image at build time (build runs before the firewall), so the runtime allowlist needs no new entry. Use when e2e must run in-container (Playwright CDN blocked, `browser not found`), or when a credential-free `wrangler dev` accepts TCP but every request hangs — the two sandbox-only traps are a rate-limit binding proxying to a remote Cloudflare resource whose handshake never completes without credentials (the wrangler 3.x `unsafe` form — the v4 top-level `ratelimits` key is simulated locally as of wrangler 4.125, verified 2026-09-02, so stripping it is now belt-and-braces), and a `localhost` bind stalling on IPv4/IPv6 dual-stack resolution (bind `--ip 127.0.0.1` end to end). Covers the Dockerfile bake block (plus the variant both production users actually run: explicit apt list, `npx playwright install chromium` as `node`, CJK fonts), `--no-sandbox` gated on DEVCONTAINER, exact version pinning (a blocked CDN can't self-heal drift), stripping rate limits from the built e2e config, and neutralising the `.dev.vars` copy that `@cloudflare/vite-plugin` 1.x writes into `dist/<worker>/` (wrangler reads it from the config's directory and it overrides `vars`; CLI `--var` outranks it).
 license: MIT
 compatibility: Designed for Claude Code and similar agents. Assumes the `claude-code-docker-sandbox` environment (Docker Compose, default-deny egress firewall, bind-mounted repo) and a Playwright suite that targets a local `wrangler dev` server — typically wired per `cloudflare-workers-e2e-playwright`. The bake recipe installs Chromium; adapt for other browsers.
 metadata:
   author: okayus
-  version: "0.1.1"
+  version: "0.2.0"
 ---
 
 # Playwright e2e inside the Docker sandbox (credential-free, zero runtime egress)
@@ -30,6 +30,9 @@ only the sandbox-specific layer: the bake, and the two traps that only bite when
 - `pnpm e2e` in-container fails with `browser not found`
 - A **credential-free** `wrangler dev` (sandbox, or a logged-out host) logs `Ready` and
   accepts TCP, but **every request hangs with no response** — Traps 1-2 below
+- The request **after** an early-rejected POST (401/403 answered before the body was read)
+  is a 500 `Network connection lost` and `wrangler dev` exits — not a sandbox trap: see
+  Trap 3 of [`cloudflare-workers-e2e-playwright`](../cloudflare-workers-e2e-playwright/SKILL.md)
 - You're deciding whether in-container e2e needs new egress-allowlist entries (it needs
   **zero** — that's the point)
 
@@ -46,7 +49,10 @@ Do **not** use for:
       and both are bumped together (rebuild after)
 - [ ] Chromium `--no-sandbox` gated on the `DEVCONTAINER` env marker — host runs keep the
       real browser sandbox
-- [ ] The built e2e config **strips the rate-limit binding** (`unsafe` *and* `ratelimits`)
+- [ ] The built e2e config **strips the rate-limit binding** (`unsafe` *and* `ratelimits` — the
+      v4 key no longer hangs, see Trap 1, but stripping keeps e2e independent of the limiter)
+- [ ] The `.dev.vars` copy that `@cloudflare/vite-plugin` 1.x writes into `dist/<worker>/` is
+      neutralised — deleted by `prepare-config`, or every key overridden with `--var`
 - [ ] `wrangler dev` binds `--ip 127.0.0.1` (not `localhost`), and `ORIGIN` + Playwright
       `baseURL` use the same literal host
 
@@ -84,6 +90,15 @@ verified 2026-08-22 in matatabetai). If the bake step sits at `100%` with no fur
 output, test the pin × base combination standalone before blaming the CDN:
 `docker run --rm -e DEBUG=pw:install node:24 npx -y playwright@<ver> install chromium`.
 
+**The variant both production users actually run** (matatabetai 2026-08-22, kokemusu
+2026-09-02, node:24 / playwright 1.62.1, ~3 min build): the Chromium apt libraries as an
+explicit list in the root apt layer (plus `fonts-noto-cjk` — a Japanese UI renders tofu in
+failure screenshots without it), then `npx -y playwright@${PLAYWRIGHT_VERSION} install
+chromium` **as `node`** after the Claude install, so the browser lands in
+`/home/node/.cache/ms-playwright` (an image layer — never mount a volume there) and no
+`PLAYWRIGHT_BROWSERS_PATH` / `chmod` dance is needed. The exact block is in the reference
+next to the canonical one; both keep `PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1` and the pin.
+
 Gate Chromium's own sandbox off **only in-container** (the container has `NET_ADMIN` but
 not `SYS_ADMIN`, so the setuid sandbox can't initialize):
 
@@ -101,21 +116,34 @@ This is the same build-time-vs-runtime-network pattern as the Rust/Haskell toolc
 Symptom: `wrangler dev` logs `Ready` and the port accepts TCP, but **every request hangs**
 with no response; the startup log says `connected to remote resource`.
 
-Rate limiting reaches `wrangler dev` as a binding it can't simulate locally — wrangler 3.x
-wires it via the `unsafe` binding form, wrangler 4.36+ as the top-level `ratelimits` key —
-and the dev-time proxy to the **remote** Cloudflare resource never completes its handshake
-in a credential-free environment, blocking the whole pipeline. Fix: **strip both keys**
-from the built config before serving it for e2e. The limiter is fail-open and rate
-limiting is out of e2e scope (verify it via
-[`cloudflare-workers-bot-scan-defense`](../cloudflare-workers-bot-scan-defense/SKILL.md)),
-so nothing of value is lost:
+Wrangler 3.x wires rate limiting via the `unsafe` binding form, which `wrangler dev` cannot
+simulate: the dev-time proxy to the **remote** Cloudflare resource never completes its
+handshake in a credential-free environment and blocks the whole pipeline. **The v4
+top-level `ratelimits` key does not do this** — it is simulated locally (verified 2026-09-02
+in kokemusu, wrangler 4.125.0, credential-free container, under both `vite dev` and
+`wrangler dev --config dist/…`: a 40-request burst against a 30/60 s limiter answered
+29×200 + 11×429, no hang, no `connected to remote resource` line). Fix for the 3.x form,
+and still the recommendation for v4: **strip both keys** from the built config before
+serving it for e2e — the limiter is fail-open, rate limiting is out of e2e scope (verify it
+via [`cloudflare-workers-bot-scan-defense`](../cloudflare-workers-bot-scan-defense/SKILL.md)),
+and a stripped binding means a burst of e2e requests can never 429 your own golden path:
 
 ```typescript
 // e2e/prepare-config.ts — post-build, editing dist/<bundle>/wrangler.json
 const cfg = JSON.parse(readFileSync(CONFIG, "utf8"));
 delete cfg.unsafe;      // wrangler 3.x form (observed to hang credential-free)
-delete cfg.ratelimits;  // wrangler 4.36+ form (local behavior undocumented — strip it too)
+delete cfg.ratelimits;  // wrangler 4.x form: simulated locally since ≤ 4.125 (verified
+                        // 2026-09-02); stripped anyway so e2e never depends on the limiter
 ```
+
+While you are in that file: `@cloudflare/vite-plugin` 1.x **copies `.dev.vars` into
+`dist/<worker>/`** at build time, and wrangler reads `.dev.vars` from the directory of the
+config it was given — so the developer's `DEV_CSP=1` / `ORIGIN=…:5273` silently override
+whatever `vars` the config carries (verified 2026-09-02: relaxed CSP and 403s on every POST
+until it was removed). Either `rmSync("dist/<worker>/.dev.vars")` here and write the e2e
+values into `cfg.vars`, or pass every key with `--var` (CLI `--var` outranks the copy —
+verified with `--var RP_ID:vartest` showing up in `login/begin`). The main skill's Trap 2
+has the full write-up.
 
 ## Trap 2: bind `--ip 127.0.0.1`, not `localhost`
 
