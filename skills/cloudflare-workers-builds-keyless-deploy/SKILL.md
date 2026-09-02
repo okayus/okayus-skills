@@ -122,7 +122,7 @@ Third application. Worker `matatabetai` (account subdomain `shiraoka`), pnpm mon
 - Steps B connected on the first try. The saved panel survived a reload: root directory `packages/web`, production branch `main`, preview builds off, watch-path excludes `docs/*` + `*.md`, token `matatabetai Workers Builds`.
 - The generated token's permission notice (expanded before connecting) again included **D1 Storage (編集)** and **Workers R2 Storage (編集)**, plus KV, Vectorize, Queues, Pipelines, Containers, Cloudchamber, AI Search (edit), Connectivity Directory (read+bind), Workers routes on all zones, and user details + memberships (read). Both bindings this project needs were covered without touching My Profile.
 - The picker default was again another project's token (`kokemusu Workers Builds`) — third project, third time.
-- UNVERIFIED: the push-triggered build itself (the `deploy.yml`-deleting PR was still open at writing) — expect `Workers Builds: matatabetai` on that merge.
+- **The push-triggered build is now verified end to end.** Merging the `deploy.yml`-deleting PR put both `ci` (success) and `Workers Builds: matatabetai` (success) on the merge commit, and `/health` answered 200. So on route B the very first build is push-triggered, posts the check-run, and the old Actions deploy does not race it — the workflow is absent from the ref being pushed.
 
 ## Verified on kokemusu (2026-08-23) — and what is still open
 
@@ -133,5 +133,5 @@ Second application of this skill (after mazuoboeru / nyalog), driven by a browse
 - The picker's default was another project's token (`nyalog Workers Builds`) with a yellow "missing permissions: email_routing_…" notice — that notice is noise unless the Worker uses Email Routing.
 - Pre-flight mattered: `main` did not yet contain `apps/web` (three PRs open) — connecting at that point would have failed the first build at the path step for a non-settings reason.
 - UNVERIFIED: why a hand-made user token is absent from the picker (filtered by creator? by full permission set? — the docs say existing tokens are selectable). Re-check on the next project before restoring the old step.
-- UNVERIFIED: a push-triggered build on kokemusu (only the manual first build has run as of writing) — expect `Workers Builds: kokemusu` on the next merge to `main`.
+- UNVERIFIED *on kokemusu specifically* (only its manual first build has run) — but the push → build → `Workers Builds: <worker>` check-run path itself is confirmed on matatabetai 2026-09-02, so expect the same here.
 - UNVERIFIED: the English labels of the setup dialog (run under the Japanese dashboard); *Path* / *Advanced settings* are translations, *Root directory* is confirmed by the docs' settings table.
