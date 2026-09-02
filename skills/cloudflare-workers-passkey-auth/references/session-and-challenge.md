@@ -97,12 +97,13 @@ export async function issueChallenge(
 
 // Single use: the cookie is deleted before it is validated, so a failed verify cannot be retried
 // against the same challenge. Callers narrow `state.kind` themselves.
+// (verified 2026-08-30 in matatabetai: hono/jwt verify rejects exp <= now; pass { alg, aud } to bind the audience.)
 export async function consumeChallenge(
   c: Context<Env>,
 ): Promise<{ challenge: string; state: ChallengeState } | null> {
   const name = challengeCookieName(c);
   const token = getCookie(c, name);
-  deleteCookie(c, name, { path: "/" });
+  deleteCookie(c, name, cookieBase(c)); // same attrs as set: __Host- needs Secure even to delete
   if (!token) return null;
   try {
     // hono/jwt verify checks the signature and `exp` (UNVERIFIED in SKILL.md — unit-test it).
@@ -181,7 +182,7 @@ export async function revokeSession(c: Context<Env>): Promise<void> {
       // invalid token: nothing to revoke
     }
   }
-  deleteCookie(c, name, { path: "/" });
+  deleteCookie(c, name, cookieBase(c)); // same attrs as set: __Host- needs Secure even to delete
 }
 
 function isLocalOrigin(origin: string): boolean {
@@ -241,13 +242,13 @@ export function sessionMiddleware() {
       .where(eq(sessions.id, payload.sid));
     const row = rows[0];
     if (!row) {
-      deleteCookie(c, name, { path: "/" });
+      deleteCookie(c, name, cookieBase(c)); // same attrs as set: __Host- needs Secure even to delete
       return unauthorized(c, "session_expired");
     }
     const expiresMs = new Date(row.expiresAt).getTime();
     if (expiresMs < Date.now()) {
       await db.delete(sessions).where(eq(sessions.id, row.sid));
-      deleteCookie(c, name, { path: "/" });
+      deleteCookie(c, name, cookieBase(c)); // same attrs as set: __Host- needs Secure even to delete
       return unauthorized(c, "session_expired");
     }
 
