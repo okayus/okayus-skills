@@ -93,6 +93,10 @@ Note this only affects local dev. Your `wrangler.jsonc` `vars.RP_ID` should be y
 
 When you switch e2e to use `wrangler dev` instead of `vite dev`, the same `.dev.vars` is read (assuming you start wrangler from the same cwd). RP_ID still resolves to `localhost`. Browser origin is `http://localhost:5173`. The virtual authenticator uses the page's hostname as RP_ID for credential creation. Match achieved.
 
+## In the Docker sandbox: bind `127.0.0.1`, open `localhost`
+
+`playwright-e2e-in-docker-sandbox` says to bind `wrangler dev --ip 127.0.0.1` because a `localhost` bind stalls in-container. WebAuthn RP IDs must be domain names, so **keep the browser side on `localhost`**: `baseURL: http://localhost:<port>`, `RP_ID=localhost`, `ORIGIN=http://localhost:<port>` — Chromium resolves `localhost` to the loopback address the server is bound to, and the virtual authenticator registers / asserts normally. Only the bind address is the literal IP (verified 2026-08-30 in matatabetai: 7 specs green in-container with this split). Do not try `RP_ID=127.0.0.1`.
+
 ## Test isolation
 
 Resident-key credentials live inside the virtual authenticator. Each Playwright test gets a fresh `BrowserContext` (and so a fresh CDP session, fresh authenticator) — no credential leakage between tests.

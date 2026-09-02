@@ -110,7 +110,7 @@ const { authenticatorId } = await cdp.send("WebAuthn.addVirtualAuthenticator", {
 });
 ```
 
-The virtual authenticator must be enabled **before** `page.goto()` of any auth-relevant page. RP_ID must match the page origin's hostname (`localhost` for local dev, your prod domain in prod). See [references/webauthn-virtual-authenticator.md](references/webauthn-virtual-authenticator.md) for the full helper module + .dev.vars requirements.
+The virtual authenticator must be enabled **before** `page.goto()` of any auth-relevant page. RP_ID must match the page origin's hostname (`localhost` for local dev, your prod domain in prod). In the Docker sandbox bind the server to `127.0.0.1` but keep `baseURL` / `ORIGIN` / `RP_ID` on `localhost` (verified 2026-08-30 in matatabetai — see the reference). See [references/webauthn-virtual-authenticator.md](references/webauthn-virtual-authenticator.md) for the full helper module + .dev.vars requirements.
 
 ## Third-party OAuth (Google / GitHub): the seeded-session seam
 
