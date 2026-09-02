@@ -3,7 +3,8 @@
 Screen-by-screen notes for the one-time ceremony in `SKILL.md`, written so that a
 browser-automation agent (Claude in Chrome, Playwright) — or a human in a hurry —
 does not have to guess where a field is or what it is called. Recorded on
-2026-08-23 on a **Japanese-language** dashboard; English equivalents are given
+2026-08-23 (Screens 1-5) and 2026-09-02 (Screen 3B, the existing-Worker route) on a
+**Japanese-language** dashboard; English equivalents are given
 where the docs confirm them (`Root directory`, `Advanced settings`,
 `Builds for non-production branches`, `Create new token`) and marked *(translated)*
 where they are inferred from the Japanese label.
@@ -15,7 +16,7 @@ where they are inferred from the Japanese label.
 | User API tokens list | `https://dash.cloudflare.com/profile/api-tokens` — `?search=<name>` filters the table; the first page shows 10 rows, so a new token may be off-page without the filter |
 | Create a Worker from git | `https://dash.cloudflare.com/<account-id>/workers-and-pages/create` |
 | A build's page | `https://dash.cloudflare.com/<account-id>/workers/services/view/<worker>/production/builds/<build-id>` (the dialog redirects here after *Deploy*) |
-| Worker settings (the Builds section is on this page, right-hand nav item ビルド / *Builds*) | `https://dash.cloudflare.com/<account-id>/workers/services/view/<worker>/production/settings` |
+| Worker settings (the Builds section is on this page, right-hand nav item ビルド / *Builds*; `#builds` is appended when you click it, but loading the URL with the anchor does **not** scroll there — click the nav item) | `https://dash.cloudflare.com/<account-id>/workers/services/view/<worker>/production/settings` |
 
 `<account-id>` is the 32-hex id from `wrangler whoami`. Logging in is the human's job —
 an agent must not type credentials; hand over the tab and resume once the account home shows.
@@ -69,6 +70,38 @@ pre-selected default token and is noise unless the Worker uses Email Routing.
 
 Bottom bar: **戻る / Back** · **デプロイ / Deploy**. *Deploy* creates the Worker and starts
 the first build immediately — there is no confirmation step.
+
+## Screen 3B — 既存 Worker: リポジトリに接続 (Connect a repository)
+
+Reached from Screen 5's *Git リポジトリ* card via **接続 / Connect** when the Worker
+already exists. This is the route to use whenever `wrangler deployments list` prints
+anything — the Create-an-app wizard refuses a name already in use (red inline error
+under プロジェクト名: 「この名前のプロジェクトはすでに存在します。別の名前を選択してください」).
+The rejection is client-side validation: nothing is created, no orphan token.
+
+Modal titled **リポジトリに接続** / "Git プロバイダーからリポジトリを選択":
+
+| Field (JA) | Default | Set to |
+|---|---|---|
+| Git アカウント | your GitHub account | leave |
+| リポジトリ | **pre-filled** with the repo matching the Worker | leave (verify) |
+| 本番ブランチ | **pre-filled** `main` | leave (verify) |
+| ☑ プレビュービルドを有効化 | **ticked** | **untick** — the 非本番ブランチのデプロイ コマンド field disappears when it is really off, which is the reliable tell |
+| ビルド コマンド | `読み込み中...` for a second, then `pnpm run build` | wait for it to load, then `pnpm install --frozen-lockfile && pnpm run build` |
+| デプロイ コマンド | `npx wrangler deploy` | `pnpm exec wrangler d1 migrations apply <db> --remote && pnpm exec wrangler deploy` |
+| 詳細設定 → パス | `/` | `apps/web` (the package dir) |
+| 詳細設定 → API トークン | **another project's build token** | **新しいトークンを作成する — it is the FIRST entry here**, not the last as in the wizard |
+| 詳細設定 → トークン名 | **pre-filled** `Workers Builds - YYYY-MM-DD HH:MM` | overwrite with `<worker> Workers Builds` |
+| 詳細設定 → 変数名 / 変数値 | empty | leave |
+| 詳細設定 → ビルド キャッシュ (toggle) | off | leave |
+
+There is **no project-name field** — that is the difference that makes this route work.
+Bottom bar: **キャンセル** · **接続**.
+
+After 接続 the page returns to Screen 5 with a blue notice
+「Git リポジトリにコミットをプッシュして最初のビルドを開始できるようになりました」 —
+**no build is started**. The first build is whatever you push next, and it posts a real
+`Workers Builds: <worker>` check-run.
 
 ## Screen 4 — Build page (ビルド #xxxxxxxx)
 
@@ -125,7 +158,7 @@ for e.g. the Builds REST API (`Workers Builds Configuration: Edit`, user token o
   do not read it out, navigate straight to `/profile/api-tokens?search=<name>` and only
   confirm the row exists. To delete an orphan: row ⋯ menu → delete.
 
-## Browser-agent notes (Claude in Chrome, 2026-08-23)
+## Browser-agent notes (Claude in Chrome, 2026-08-23 and 2026-09-02)
 
 - The browser may run on a different machine from the terminal (Chrome on a Mac mini,
   CLI on Ubuntu). Everything the ceremony touches is server-side state, so that is fine;
@@ -140,6 +173,10 @@ for e.g. the Builds REST API (`Workers Builds Configuration: Edit`, user token o
 - Dropdowns that still show the prior value after a click (e.g. the picker's pre-selected
   token) are a sign the click opened the list but nothing was chosen — screenshot before
   moving on.
+- **`form_input` on the React tick-boxes reports success and does not stick.** "Checkbox unchecked (previous: true)" came back, and the box was still ticked on the next screenshot (the 非本番ブランチのデプロイ コマンド field was still rendered). Text inputs and textareas set fine that way; **tick-boxes need a real `left_click`**. Screenshot after every tick-box.
+- Element refs go stale when an accordion expands or a modal re-renders — a click by `ref` then silently lands at the viewport origin (the cursor in the screenshot is the tell). Re-run `find` after any expand/collapse, or click by coordinate from a screenshot taken *after* it.
+- The dash re-scales the viewport repeatedly during the wizard (1512 → 1853 → 1568 px wide in one run), so a coordinate from two screenshots ago misses. Screenshot immediately before each click.
+- `Page.captureScreenshot` occasionally times out at 30 s mid-wizard; just wait 3 s and screenshot again — the page is fine.
 - Do not *Retry* a failing build repeatedly while changing settings; capture the log tail
   (ビルドログをコピー) and stop. One retry after a token fix is the limit.
 - Never screenshot or read the API-token value screen; the skill's whole point is that
