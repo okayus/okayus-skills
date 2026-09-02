@@ -5,7 +5,7 @@ license: MIT
 compatibility: Designed for Claude Code and similar agents. Targets Cloudflare Workers with Hono + Vite + @cloudflare/vite-plugin + Playwright, with either WebAuthn (passkey) auth via `@simplewebauthn` OR third-party OAuth (Google / GitHub, e.g. via `arctic`). Requires wrangler CLI. Assumes you already have a working Cloudflare Workers skeleton and a strict CSP middleware in place — if not, see `cloudflare-workers-deploy-skeleton` first.
 metadata:
   author: okayus
-  version: "0.2.0"
+  version: "0.2.1"
 ---
 
 # Cloudflare Workers + Playwright e2e (without the two silent traps)
@@ -110,7 +110,7 @@ const { authenticatorId } = await cdp.send("WebAuthn.addVirtualAuthenticator", {
 });
 ```
 
-The virtual authenticator must be enabled **before** `page.goto()` of any auth-relevant page. RP_ID must match the page origin's hostname (`localhost` for local dev, your prod domain in prod). See [references/webauthn-virtual-authenticator.md](references/webauthn-virtual-authenticator.md) for the full helper module + .dev.vars requirements.
+The virtual authenticator must be enabled **before** `page.goto()` of any auth-relevant page. RP_ID must match the page origin's hostname (`localhost` for local dev, your prod domain in prod). In the Docker sandbox bind the server to `127.0.0.1` but keep `baseURL` / `ORIGIN` / `RP_ID` on `localhost` (verified 2026-08-30 in matatabetai — see the reference). See [references/webauthn-virtual-authenticator.md](references/webauthn-virtual-authenticator.md) for the full helper module + .dev.vars requirements.
 
 ## Third-party OAuth (Google / GitHub): the seeded-session seam
 
