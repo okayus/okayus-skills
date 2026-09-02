@@ -122,6 +122,13 @@ INITIAL_REGISTRATION_TOKEN=<some-test-only-value>   # if your app gates first-us
 
 Document this in `e2e/README.md` so the next person setting up local dev knows what to put in `.dev.vars`.
 
+## Verified 2026-09-02 in kokemusu (single-user variant, in-container)
+
+- The server asks `residentKey: "required"`, `userVerification: "preferred"` and verifies with `requireUserVerification: false`; the CTAP2 options above (`hasResidentKey`, `hasUserVerification`, `isUserVerified: true`) register and assert without any tweak.
+- Register → `page.reload()` → write → logout → **login** (no `allowCredentials`, discoverable credential picked by the authenticator) all in one spec, on one `BrowserContext` — the credential created by register is the one login uses, so the spec proves `generateAuthenticationOptions` → `verifyAuthenticationResponse` wiring too. ~1 s.
+- Single-user twist: `register/verify` adds a credential to the existing `user` row when one exists, so the DB reset in `globalSetup` is what makes "a fresh user with a fresh passkey" true — reset before asserting on counts.
+- Chromium 151 (playwright 1.62.1) with `--no-sandbox` gated on `DEVCONTAINER`, 10 tests green twice in a row.
+
 ## Headless CI caveat
 
 Chromium's CDP `WebAuthn.addVirtualAuthenticator` works in headless mode, but specific behaviors (`isUserVerified` propagation, transport=`internal` vs `usb`) have shown small differences across Chromium versions on Ubuntu CI runners. If you decide to add e2e to CI later:

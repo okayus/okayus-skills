@@ -1,11 +1,11 @@
 ---
 name: cloudflare-workers-e2e-playwright
-description: Wire Playwright e2e tests against a Cloudflare Workers app (Hono + Vite + @cloudflare/vite-plugin) without falling into the two traps that silently break things — the strict CSP vs Vite HMR inline preamble conflict that prevents React from mounting (on `page.reload()` with vite-plugin 0.1.x; from the initial load on 1.x), and the `wrangler dev --config` state-path quirk that makes the Worker query an empty D1 sqlite. Covers why you must target the build artifact via `wrangler dev` (not `vite dev`), why `--persist-to .wrangler/state` is mandatory, the WebAuthn virtual authenticator recipe (no `DEV_BYPASS_USER_ID` shortcut — the real register/login wiring is tested), the seeded-session seam for third-party OAuth apps (seed a real session row + inject its cookie; OAuth has no virtual authenticator), and the narrow "3 specs only" scope (golden path / auth boundary / security headers). For running the suite credential-free inside a Docker sandbox, see the companion skill playwright-e2e-in-docker-sandbox.
+description: Wire Playwright e2e tests against a Cloudflare Workers app (Hono + Vite + @cloudflare/vite-plugin) without falling into the two traps that silently break things — the strict CSP vs Vite HMR inline preamble conflict that prevents React from mounting (on `page.reload()` with vite-plugin 0.1.x; from the initial load on 1.x), and the `wrangler dev --config` state-path quirk that makes the Worker query an empty D1 sqlite. Covers why you must target the build artifact via `wrangler dev` (not `vite dev`), why `--persist-to .wrangler/state` is mandatory, the WebAuthn virtual authenticator recipe (no `DEV_BYPASS_USER_ID` shortcut — the real register/login wiring is tested), the seeded-session seam for third-party OAuth apps (seed a real session row + inject its cookie; OAuth has no virtual authenticator), the narrow "3 specs only" scope (golden path / auth boundary / security headers), the `.dev.vars` copy that `@cloudflare/vite-plugin` 1.x writes into `dist/<worker>/` (it silently overrides your e2e vars), the unread-request-body trap that makes `wrangler dev` answer the NEXT request with a 500 and exit (never send a body to a route that rejects before reading it), a dedicated e2e state dir so runs never wipe `pnpm dev` data, and type-checking the specs in CI with `tsconfig.e2e.json` even though e2e itself does not run there. For running the suite credential-free inside a Docker sandbox, see the companion skill playwright-e2e-in-docker-sandbox.
 license: MIT
 compatibility: Designed for Claude Code and similar agents. Targets Cloudflare Workers with Hono + Vite + @cloudflare/vite-plugin + Playwright, with either WebAuthn (passkey) auth via `@simplewebauthn` OR third-party OAuth (Google / GitHub, e.g. via `arctic`). Requires wrangler CLI. Assumes you already have a working Cloudflare Workers skeleton and a strict CSP middleware in place — if not, see `cloudflare-workers-deploy-skeleton` first.
 metadata:
   author: okayus
-  version: "0.3.0"
+  version: "0.4.0"
 ---
 
 # Cloudflare Workers + Playwright e2e (without the two silent traps)
@@ -42,6 +42,9 @@ Do **not** use for:
 - [ ] e2e test count stays narrow: golden path 1 + auth boundary 1 + security headers 1-3 (≤ 6 specs total)
 - [ ] `.dev.vars` (or e2e-specific vars) documented in `e2e/README.md` with the required values (`SESSION_SECRET`, any auth bootstrap tokens, `RP_ID=localhost` if WebAuthn; `ORIGIN` = `baseURL` if OAuth — note the seam needs **no** OAuth client secrets)
 - [ ] `e2e/helpers/dev-reset.ts` / `seed.ts` (or equivalent) hardcodes `--local` in every wrangler invocation to prevent accidental prod D1 wipe
+- [ ] The `.dev.vars` copy in `dist/<bundle>/` is neutralised (deleted by a prepare step, or every key passed with `--var`) — Trap 2b
+- [ ] No spec sends a request body to a route that rejects before reading it (session 401 / CSRF 403) — Trap 3
+- [ ] `tsconfig.e2e.json` (`types: ["node"]`) is part of `pnpm check`, so CI type-checks `e2e/**` and `playwright.config.ts` even though e2e does not run there
 - [ ] One paragraph in `playwright.config.ts` explaining **why we don't target `vite dev`** so the next person doesn't "simplify" it back
 - [ ] If running in a Docker sandbox: follow the companion skill [`playwright-e2e-in-docker-sandbox`](../playwright-e2e-in-docker-sandbox/SKILL.md) (baked browser, stripped rate-limit binding, `--ip 127.0.0.1`, gated `--no-sandbox`)
 
@@ -90,6 +93,25 @@ pnpm exec wrangler dev \
 
 See [references/wrangler-state-path-quirk.md](references/wrangler-state-path-quirk.md) for the physical evidence (`du -sh dist/<bundle>/.wrangler/`) and how to detect the trap.
 
+**Variant — a dedicated e2e state dir.** The requirement is "server and helper commands look at the same sqlite", not the literal `.wrangler/state`. kokemusu (2026-09-02) points both at `--persist-to .wrangler/e2e`: `globalSetup` runs `wrangler d1 migrations apply <db> --local --persist-to .wrangler/e2e` (idempotent, creates the file on first run) and then empties every table, so a run starts from "no user, no rows" and **never touches the `pnpm dev` database** (its registered passkeys and posts survive). One constant (`E2E_PERSIST_DIR` in `e2e/env.ts`) feeds the db helper; the `e2e:server` script repeats it on the command line.
+
+**Trap 2b — the `.dev.vars` copy.** `@cloudflare/vite-plugin` 1.x copies `.dev.vars` into `dist/<bundle>/.dev.vars` at build time, and wrangler reads `.dev.vars` from the directory of the config it was given — the same config-relative rule as the state path. So the e2e server silently runs with the developer's `DEV_CSP=1` (relaxed CSP → the security spec fails) and dev `ORIGIN` (→ 403 on every POST, `challenge_mismatch` on verify). Fix in the prepare step: delete `dist/<bundle>/.dev.vars` and write the e2e values into the derived config's `vars`, or pass every key with `--var` (CLI `--var` outranks the copy; measured precedence `--var` > `.dev.vars` > `vars`). Verified 2026-09-02 in kokemusu (vite-plugin 1.53, wrangler 4.125).
+
+## Trap 3: a request body the Worker never reads kills `wrangler dev`
+
+Symptom: one spec passes, the next one's first request (or the next request from `curl`) is a **500 `Network connection lost`**, and `wrangler dev` prints `✘ [ERROR]` and exits — every later spec fails with `ECONNREFUSED`.
+
+Cause: the previous request carried a body (a JSON POST) and the Worker answered **before reading it** — exactly what a session gate (401) or a CSRF check (403) does. `wrangler dev`'s ProxyWorker → user-worker hop keeps that connection pooled, the runtime closes it because of the unread body, and the next request through the proxy dies on the stale connection (`entry.worker.js` `fetch` → `Network connection lost`); wrangler treats the ProxyWorker error as fatal. Reproduced deterministically with curl on wrangler **4.125.0 and 4.128.0** (2026-09-02, kokemusu):
+
+```bash
+curl -X POST -H 'Origin: http://localhost:5183' -H 'Content-Type: application/json' \
+     --data '{"body":"x"}' http://127.0.0.1:5183/api/posts        # 401, body unread
+curl -X POST -H 'Origin: http://localhost:5183' http://127.0.0.1:5183/api/auth/logout
+#   → 500 Network connection lost, then wrangler dev exits
+```
+
+Production workerd does not care — returning early without draining the body is normal and correct there — so **do not change the Worker** for this (no defensive `await c.req.text()` in the session middleware). The rule lives in the specs: **never send a body to a route that rejects before reading it**. An auth-boundary spec asserts `POST /api/posts` → 401 *without* `data:`; the outcome is identical because the gate answers first. Requests whose body *is* read before the reply (register/begin parsing JSON before a 403 on a wrong token, a validation 400 after `c.req.json()`) are fine. Upgrading wrangler does not help (4.128.0 behaves the same); write the rule into `e2e/README.md`.
+
 ## WebAuthn (passkey) automation
 
 If your app uses WebAuthn, **do not** add a `DEV_BYPASS_USER_ID` shortcut just to make e2e easier. That bypasses `sessionMiddleware` / register / login entirely, so the e2e provides zero regression coverage for the wiring you most want to protect.
@@ -111,6 +133,8 @@ const { authenticatorId } = await cdp.send("WebAuthn.addVirtualAuthenticator", {
 ```
 
 The virtual authenticator must be enabled **before** `page.goto()` of any auth-relevant page. RP_ID must match the page origin's hostname (`localhost` for local dev, your prod domain in prod). In the Docker sandbox bind the server to `127.0.0.1` but keep `baseURL` / `ORIGIN` / `RP_ID` on `localhost` (verified 2026-08-30 in matatabetai — see the reference). See [references/webauthn-virtual-authenticator.md](references/webauthn-virtual-authenticator.md) for the full helper module + .dev.vars requirements.
+
+Verified 2026-09-02 in kokemusu (single-user passkey variant, in-container): one spec does register (token-gated, `residentKey: "required"`, `userVerification: "preferred"`) → `page.reload()` → a write → logout → login by discoverable credential against the same virtual authenticator, in about a second; 10 tests across the 3 specs green twice in a row.
 
 ## Third-party OAuth (Google / GitHub): the seeded-session seam
 
@@ -157,7 +181,7 @@ E2E is for "configuration / wiring", not "domain semantics". The latter belongs 
 
 1. **Golden path (1 spec)**: register → primary CRUD → logout. Catches WebAuthn config breakage, session cookie wiring, route → handler → DB → SPA round-trip, page reload persistence.
 2. **Authorization boundary (1 spec)**: authed user attempts to access a non-member resource → server returns 404 (existence-hiding) + UI shows access-denied. Catches middleware mount-order regressions in the Hono router.
-3. **Security headers (1-3 specs)**: `/`, an authenticated 401 path, and `/health` all carry the expected CSP / HSTS / X-Frame-Options / Referrer-Policy / X-Content-Type-Options. Catches `app.use("*", secureHeaders)` getting accidentally narrowed to `app.use("/api/*", ...)`. Scope note: assert the values your middleware emits **for the e2e scheme** — e2e runs on `http://127.0.0.1`, so scheme-keyed branches (a dev CSP over http, `__Host-` cookies / HSTS only over https) must be asserted in their http form.
+3. **Security headers (1-3 specs)**: `/`, an authenticated 401 path, and `/health` all carry the expected CSP / HSTS / X-Frame-Options / Referrer-Policy / X-Content-Type-Options. Catches `app.use("*", secureHeaders)` getting accidentally narrowed to `app.use("/api/*", ...)`. Scope note: assert the values your middleware emits **for the e2e scheme** — e2e runs on `http://127.0.0.1`, so scheme-keyed branches (a dev CSP over http, `__Host-` cookies / HSTS only over https) must be asserted in their http form. The flip side: http e2e is **structurally blind** to https-only failures — hono throws when a `__Host-` cookie is written (deletion included) without `secure`, and that reached kokemusu production unseen (#15) because vite dev, unit tests *and* e2e all run on http. Keep one unit test per cookie-clearing path with an https `ORIGIN`; e2e cannot stand in for it.
 
 Total: 5 test cases across 3 specs is plenty for a 2-developer / family-scale project. Resist adding more — broader coverage belongs in unit tests, not slow brittle browser tests. See [references/test-scope-philosophy.md](references/test-scope-philosophy.md) for what each test is actually catching and why other ideas (multi-space switching UX, complete history, etc.) explicitly belong in later phases.
 
@@ -208,6 +232,8 @@ WebAuthn virtual authenticator behavior occasionally diverges across Chromium ve
 
 Document this decision explicitly in `playwright.config.ts` so the next contributor doesn't add a workflow file thinking it was an oversight.
 
+What CI *should* do is type-check the specs: `tsc` on the app's tsconfig never sees `e2e/**`, so an API-shape change can break a spec silently until someone runs it locally. Add a `tsconfig.e2e.json` that extends the app config with `"types": ["node"]` (the helpers use `node:child_process`; do not add Node's globals to the Worker's config) and `"include": ["e2e/**/*", "playwright.config.ts"]`, and append `tsc --noEmit -p tsconfig.e2e.json` to the `check` script CI already runs. Cost: `@types/node` as a devDependency. Verified 2026-09-02 in kokemusu.
+
 ## Running e2e inside a Docker sandbox (credential-free)
 
 The whole suite can run in-container with **zero runtime egress**: bake Chromium at
@@ -234,4 +260,4 @@ place.
 - [references/oauth-seeded-session-seam.md](references/oauth-seeded-session-seam.md) — the OAuth equivalent (no virtual authenticator exists): seed a real session row + inject the cookie, the exercised/not-exercised split, cookie-name-vs-scheme, and the heavier "mock the IdP" option
 - In-sandbox execution (baked Chromium, the two credential-free `wrangler dev` hang traps) — moved to the companion skill [`playwright-e2e-in-docker-sandbox`](../playwright-e2e-in-docker-sandbox/SKILL.md)
 - [references/test-scope-philosophy.md](references/test-scope-philosophy.md) — what the 3 specs actually verify, what they don't, and what to reject as out-of-scope
-- [references/playwright-config-recipe.md](references/playwright-config-recipe.md) — full `playwright.config.ts` template with the explanatory comments inline
+- [references/playwright-config-recipe.md](references/playwright-config-recipe.md) — full `playwright.config.ts` template with the explanatory comments inline, plus the kokemusu variant (dedicated state dir, `env.ts` + `prepare-config.ts` run by plain `node`, `tsconfig.e2e.json`)
