@@ -1,11 +1,11 @@
 ---
 name: cloudflare-workers-pat-bearer-auth
-description: Add personal access tokens (PATs, Bearer header) to a Hono + D1 Cloudflare Worker so CLIs, AI agents and sibling apps can call the API as a user next to the cookie session — the receiving app mints the token in its settings UI, the caller stores it, and the receiver never needs to know who is calling. Use when building a CLI or an app-to-app push ("post today's quiz results into my diary app"), when a Bearer request gets `403 csrf_origin_mismatch`, when a PAT could mint more PATs, when revoking one token must not log the user out, or when a D1 leak must not yield live credentials. Covers the `<app>_pat_` prefix (greppable; NOT auto-detected by GitHub's free push protection), sha256(token + pepper) with the pepper as a Worker Secret, the validation order that rejects junk before D1, PAT-before-session middleware, scopes as a const tuple, session-only token management, the throttled last_used_at write, the CSRF exemption for Bearer, and pepper rotation. Not Cloudflare API tokens.
+description: Add personal access tokens (PATs, Bearer header) to a Hono + D1 Cloudflare Worker so CLIs, AI agents and sibling apps can call the API as a user next to the cookie session — the receiving app mints the token in its settings UI, the caller stores it, and the receiver never needs to know who is calling. Use when building a CLI or an app-to-app push ("post today's quiz results into my diary app"), when a Bearer request gets `403 csrf_origin_mismatch`, when a PAT could mint more PATs, when revoking one token must not log the user out, or when a D1 leak must not yield live credentials. Covers the `<app>_pat_` prefix (greppable; NOT auto-detected by GitHub's free push protection), sha256(token + pepper) with the pepper as a Worker Secret, the validation order that rejects junk before D1, PAT-before-session middleware, scopes as a const tuple, session-only token management, the throttled last_used_at write, the CSRF exemption for Bearer, and pepper rotation. Also the caller-side CONTRACT recipe (v0.2.0): the receiver publishes `docs/senders.md` plus a JSON Schema generated from its zod body schema and pinned by `pnpm test`; the caller reads both from the receiver's public repo over raw GitHub from inside the sandbox firewall, vendors the schema and contract-tests its builder with `z.fromJSONSchema` — written after a hand-copied contract drifted in three days while both projects' suites stayed green. Not Cloudflare API tokens.
 license: MIT
 compatibility: Designed for Claude Code and similar agents. Targets Cloudflare Workers with Hono 4 + Drizzle ORM + D1 (SQLite) on the cloudflare-workers-deploy-skeleton stack (Vite + @cloudflare/vite-plugin, pnpm), WebCrypto only (no nodejs_compat). Needs an existing cookie-session layer — third-party OAuth (mazuoboeru, `arctic`) or passkeys (cloudflare-workers-passkey-auth); the PAT path sits in front of it. Requires wrangler CLI for `wrangler secret put PAT_PEPPER`.
 metadata:
   author: okayus
-  version: "0.1.0"
+  version: "0.2.0"
 ---
 
 # Cloudflare Workers PAT (Bearer) auth for machine callers
@@ -59,6 +59,7 @@ Constraints you accept: the raw token crosses a boundary by hand (so scope it mi
 - [ ] No `console.*` of the `Authorization` header or a token anywhere (Workers Observability persists it); log the token `id`
 - [ ] Settings UI: name → create → show-once card → list (name / created / last used / state) → revoke
 - [ ] Caller docs name the env var (`<APP>_PAT`), the base-URL override and a `whoami` smoke command
+- [ ] The receiver publishes the caller contract — `docs/senders.md` + a JSON Schema generated from the zod body schema and pinned by a file snapshot in `pnpm test`; every caller vendors that schema and contract-tests its builder with `z.fromJSONSchema` (see *The caller side: the contract*)
 - [ ] Every `UNVERIFIED:` bullet below checked on the real app and written back
 
 ## Architecture in one screen
@@ -155,6 +156,54 @@ The UI is a name field, a **show-once card** (`<code>` + "shown only now"), and 
 | AI agent in a sandbox | the sandbox's env | the token crosses the isolation boundary on purpose — grant the narrowest scope and revoke when the job is done |
 
 Receiver-side contract for app-to-app pushes: one route (`POST /api/posts`), one write scope (`post:write`), a body with no sender-specific fields, and — if the caller retries on failure — an `Idempotency-Key` header the receiver remembers for 24 h (design note; not in the source project).
+
+## The caller side: the contract (never transcribe it)
+
+The caller lives in another repo and another sandbox and cannot see the receiver's code. The obvious move — copy the body shape and the limits into the caller's ADR — is how kokemusu → mazuoboeru broke (verified 2026-09-09): mazuoboeru's ADR-0017 transcribed `{body, title?, tags}` from a grill session on 2026-09-03; kokemusu retired `title` and switched to `z.strictObject` three days later (its ADR-0006); mazuoboeru's cron then got `400` every active night. The caller's boundary logged only the status (by design), each project's unit tests pinned *its own* version of the contract, and both suites stayed green. Neither side could check the other.
+
+What both sides CAN do, without any firewall change: read the receiver's **public** repo. `init-firewall.sh` (skill `claude-code-docker-sandbox`) adds GitHub's `web` + `api` + `git` IP ranges from `api.github.com/meta`, and `raw.githubusercontent.com` sits inside the `web` range (`185.199.108.0/22`) — `curl https://raw.githubusercontent.com/<owner>/<receiver>/main/docs/senders.md` answers 200 from inside the caller's container (measured from two sandboxes). (The receiver's `*.workers.dev` host may answer too, but only because it shares Cloudflare anycast IPs with the caller's own allowlisted production host — do not rely on it; add the host to the OPTIONAL list if you need it.)
+
+**Receiver** (kokemusu ADR-0008, the first to do it):
+
+1. `docs/senders.md` is the one entry point a caller reads: PAT setup, the `curl`, the response, the error table, the rules JSON Schema cannot say (day ordering, "not after today", 厚み ⇔ range), the caller etiquette (name yourself via tags, stack yesterday's digest on yesterday via `firstDay`, send nothing on an empty day, no retry without an idempotency key), a list of the public callers to check when the wire changes, and a dated 変更履歴 of the wire.
+2. `docs/senders/posts.schema.json` is **generated** from the route's zod schema — never hand-written — and pinned by a vitest file snapshot that runs in `pnpm test`:
+
+   ```ts
+   // worker/senders-contract.test.ts
+   const FIELD_DOCS: Record<keyof z.infer<typeof createPostSchema>, string> = { body: "…", tags: "…", /* a new key fails tsc until described */ };
+   export function sendersPostSchemaJson(): string {
+     const base = z.toJSONSchema(createPostSchema);          // strictObject → additionalProperties: false
+     /* merge FIELD_DOCS into properties[*].description; add format: "date" + pattern to the day keys ('.refine' is lost in JSON Schema) */
+     return JSON.stringify({ $schema, $id: RAW_URL, title, description, ...rest }, null, 2) + "\n";
+   }
+   it("is createPostSchema, generated", async () => {
+     await expect(sendersPostSchemaJson()).toMatchFileSnapshot("../../../docs/senders/posts.schema.json");
+   });
+   ```
+
+   Change the zod schema → `pnpm test` fails → `vitest run -u worker/senders-contract.test.ts` regenerates → add the 変更履歴 line → read the listed callers over raw GitHub. The receiver still knows no caller at runtime; the list is a maintenance step, not code.
+3. Keep the schema out of the runtime: a public `/api/schema` route is one more unauthenticated surface on a private app, and raw GitHub already serves the file.
+4. Do not put the receiver's contract in a skill either — this section is the *procedure*; the numbers live in the receiver's repo.
+
+**Caller** (mazuoboeru ADR-0017 補記):
+
+1. Point your CLAUDE.md / ADR at the receiver's `docs/senders.md` raw URL and say "read it, never copy the limits".
+2. Vendor the schema next to the builder (`worker/domain/<receiver>-posts.schema.json`) with a refresh script: `"<receiver>:schema": "curl -fsSL <raw schema url> -o worker/domain/<receiver>-posts.schema.json && <your formatter>"` — run it inside the sandbox.
+3. Contract-test the pure builder against it, no extra dependency (zod ≥ 4.1 has `z.fromJSONSchema`; `format: "date"`, `pattern`, `additionalProperties: false` all honoured — checked on 4.4.3 and 4.5.2):
+
+   ```ts
+   import schema from "./kokemusu-posts.schema.json";
+   const contract = z.fromJSONSchema(schema as Parameters<typeof z.fromJSONSchema>[0]);
+   it("accepts every shape the builder produces", () => {
+     for (const results of fixtures) expect(contract.safeParse(buildDailyPost(results, ORIGIN)).error?.issues ?? []).toEqual([]);
+   });
+   it("refuses the key the receiver retired", () => {
+     expect(contract.safeParse({ ...post, title: "…" }).success).toBe(false);   // the drift this suite exists for
+   });
+   it("is the published file", () => expect(schema.$id).toBe("<raw schema url>"));
+   ```
+
+4. The signal to refresh is the receiver's 変更履歴 or a `400` in your cron log — drift now fails a test at refresh time instead of failing silently at 00:15 for days.
 
 ## Rate limiting and logging hygiene
 
