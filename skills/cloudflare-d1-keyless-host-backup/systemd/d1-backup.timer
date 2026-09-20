@@ -1,0 +1,13 @@
+[Unit]
+Description=Weekly D1 backup (Sunday 04:40 local time)
+
+[Timer]
+# A running export blocks other requests to that database, so pick the quietest hour.
+OnCalendar=Sun *-*-* 04:40:00
+# The machine may be off at 04:40. Persistent= runs the missed job at the next start
+# of the user manager (login) instead of skipping the week.
+Persistent=true
+RandomizedDelaySec=5min
+
+[Install]
+WantedBy=timers.target
