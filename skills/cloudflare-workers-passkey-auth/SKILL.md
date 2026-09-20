@@ -5,7 +5,7 @@ license: MIT
 compatibility: Designed for Claude Code and similar agents. Targets Cloudflare Workers with Hono 4 + Drizzle ORM on D1, @simplewebauthn/server + @simplewebauthn/browser ^13 (WebCrypto, no nodejs_compat), hono/jwt + hono/cookie, a React SPA served by the same Worker via @cloudflare/vite-plugin, wrangler 4, pnpm. Assumes the cloudflare-workers-deploy-skeleton baseline. Users need modern browsers with platform authenticators (iOS / Android / desktop passkeys).
 metadata:
   author: okayus
-  version: "0.2.1"
+  version: "0.2.2"
 ---
 
 # Cloudflare Workers Passkey Auth (closed registration, revocable sessions)
@@ -144,7 +144,7 @@ CSRF: `SameSite=Lax` already blocks cross-site POSTs from top-level navigations;
 
 ## Ops: tokens, secrets, recovery
 
-- **Bootstrap**: `openssl rand -hex 32 | wrangler secret put INITIAL_REGISTRATION_TOKEN` → hand the value over out-of-band → owner registers → `wrangler secret delete INITIAL_REGISTRATION_TOKEN` immediately. Unset secret = `403 registration_closed`, which also closes the deploy-then-race window.
+- **Bootstrap**: `openssl rand -hex 32` (note the value) → `wrangler secret put INITIAL_REGISTRATION_TOKEN` and paste it at the prompt — never pipe the two together, the owner has to type this value (see the pitfall below) → hand the value over out-of-band → owner registers → `wrangler secret delete INITIAL_REGISTRATION_TOKEN` immediately. Unset secret = `403 registration_closed`, which also closes the deploy-then-race window.
 - **`SESSION_SECRET` rotation** = every session and pending challenge becomes invalid (everyone logs in again); then `DELETE FROM sessions` to drop the orphans.
 - **Lost every passkey**: the operator re-opens the initial token (creates a fresh owner user; family-shared data is still reachable because authorization is per space, not per user) or pre-builds the optional recovery path that attaches a new credential to an existing `user_id`. Data source for anything worse is the D1 backup / Time Travel (`cloudflare-d1-weekly-backup-via-pr`).
 

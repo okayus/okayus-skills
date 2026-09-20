@@ -5,7 +5,7 @@ license: MIT
 compatibility: Designed for Claude Code and similar agents. Targets Linux/macOS hosts with Docker + Docker Compose v2. Container is node:24 (LTS) base, non-root `node` user, iptables/ipset egress firewall (needs NET_ADMIN + NET_RAW). Host editor + git stay outside the container; only npm/build/agent execution is isolated.
 metadata:
   author: okayus
-  version: "0.6.1"
+  version: "0.6.2"
 ---
 
 # Claude Code Docker Sandbox
@@ -125,7 +125,14 @@ hard way; each is independently deletable):
 2. **Default model via env**: `ANTHROPIC_MODEL=<alias-or-id>` in the compose
    `environment` pins the startup model without touching the picker (useful when a
    flag-gated model hasn't reached the picker yet, or to keep an autonomous loop on
-   a specific tier). `/model` still switches per session.
+   a specific tier). `/model` still switches per session. **Leave it commented out
+   if you pick models with `/model`**: while the variable is set it wins over the
+   default that `/model` saved on EVERY launch (model-config docs: "Claude Code returns
+   to that variable's model on the next launch, whatever you saved with `/model`"), so
+   `/model` becomes the first command of every session (measured: 120 times in 109 of
+   141 sessions over five weeks, on four repos whose compose predated the commented-out
+   template). For a default that a saved `/model` choice can override, the docs name
+   `ANTHROPIC_DEFAULT_MODEL` instead (not exercised here).
 3. **bypassPermissions by default — in the right scope.** For unattended loops, the
    startup command writes `permissions.defaultMode = "bypassPermissions"` into the
    **container-scope** user settings (`$CLAUDE_CONFIG_DIR/settings.json`, a named
