@@ -1,0 +1,7 @@
+[Unit]
+Description=Daily synthetic check of deployed apps (health + WebAuthn rpId), see ~/.config/app-check
+
+[Service]
+Type=oneshot
+ExecStart=%h/.local/share/mise/installs/node/lts/bin/node %h/.config/app-check/app-check.mjs
+TimeoutStartSec=5min

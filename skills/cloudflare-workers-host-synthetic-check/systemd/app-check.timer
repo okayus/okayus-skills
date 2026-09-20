@@ -1,0 +1,12 @@
+[Unit]
+Description=Daily app-check (09:05 local time)
+
+[Timer]
+# During the day on purpose: the alert is a desktop notification, so it should fire
+# when someone is likely to be at the machine.
+OnCalendar=*-*-* 09:05:00
+Persistent=true
+RandomizedDelaySec=3min
+
+[Install]
+WantedBy=timers.target
