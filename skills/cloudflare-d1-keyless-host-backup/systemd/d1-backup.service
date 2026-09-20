@@ -1,0 +1,11 @@
+[Unit]
+Description=Keyless export of every Cloudflare D1 database (host side, see ~/.config/d1-backup)
+
+[Service]
+Type=oneshot
+# systemd user units get a minimal PATH. wrangler's .bin shim execs `node`, so the
+# directory of the node you want must be on it (here: mise's LTS install).
+Environment=PATH=%h/.local/share/mise/installs/node/lts/bin:/usr/local/bin:/usr/bin:/bin
+ExecStart=%h/.local/share/mise/installs/node/lts/bin/node %h/.config/d1-backup/d1-backup.mjs
+TimeoutStartSec=45min
+Nice=10
