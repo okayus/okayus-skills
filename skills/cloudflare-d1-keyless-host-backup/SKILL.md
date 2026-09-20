@@ -123,7 +123,7 @@ Consequences:
 
 ## Trap 2: a running export blocks the database
 
-From the D1 docs: "A running export will block other database requests." For a sub-megabyte database this is a few seconds (measured: 5 databases, 2 MB of SQL in total, 19 s wall time including wrangler start-up), but it is why the timer runs at 04:40 and why databases are exported one at a time. If a Cron Trigger of yours fires at a fixed minute, keep the timer away from it.
+From the D1 docs: "A running export will block other database requests." For a sub-megabyte database this is a few seconds (measured: 4 databases, 3.2 MB of SQL in total, 19 s wall time including four wrangler start-ups), but it is why the timer runs at 04:40 and why databases are exported one at a time. If a Cron Trigger of yours fires at a fixed minute, keep the timer away from it.
 
 ## Trap 3: virtual tables break export
 
