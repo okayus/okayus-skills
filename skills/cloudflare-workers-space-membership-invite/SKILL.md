@@ -5,7 +5,7 @@ license: MIT
 compatibility: Designed for Claude Code and similar agents. Targets Cloudflare Workers with Hono 4 + Drizzle ORM + D1 (SQLite) on the cloudflare-workers-deploy-skeleton stack (Vite + @cloudflare/vite-plugin, pnpm). Needs a session layer that sets c.var.userId — passkeys via cloudflare-workers-passkey-auth, or third-party OAuth. The invite-consuming transaction uses the raw D1 binding (env.DB.batch); Drizzle everywhere else. Requires wrangler CLI.
 metadata:
   author: okayus
-  version: "0.2.0"
+  version: "0.2.1"
 ---
 
 # Per-space membership + invite links on Cloudflare Workers

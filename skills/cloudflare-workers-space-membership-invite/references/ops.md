@@ -9,7 +9,9 @@ The first registration goes through the passkey skill's `INITIAL_REGISTRATION_TO
 Runbook:
 
 ```bash
-openssl rand -hex 32 | pnpm exec wrangler secret put INITIAL_REGISTRATION_TOKEN
+openssl rand -hex 32                                        # note the value: the owner types it in the next step
+pnpm exec wrangler secret put INITIAL_REGISTRATION_TOKEN    # paste at the prompt. Piping the two together stores a
+                                                            # token nobody has seen (hit 3 times: 2026-08-01, 09-01, 09-09)
 # → owner registers on the phone that will hold the primary passkey
 pnpm exec wrangler secret delete INITIAL_REGISTRATION_TOKEN        # close the door
 pnpm exec wrangler d1 execute <db-name> --remote --command \
