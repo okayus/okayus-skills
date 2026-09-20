@@ -5,7 +5,7 @@ license: MIT
 compatibility: Designed for Claude Code and similar agents. Targets Cloudflare Workers with Hono 4 + Drizzle ORM + D1 (SQLite) on the cloudflare-workers-deploy-skeleton stack (Vite + @cloudflare/vite-plugin, pnpm), WebCrypto only (no nodejs_compat). Needs an existing cookie-session layer — third-party OAuth (mazuoboeru, `arctic`) or passkeys (cloudflare-workers-passkey-auth); the PAT path sits in front of it. Requires wrangler CLI for `wrangler secret put PAT_PEPPER`.
 metadata:
   author: okayus
-  version: "0.2.0"
+  version: "0.3.0"
 ---
 
 # Cloudflare Workers PAT (Bearer) auth for machine callers
@@ -151,9 +151,31 @@ The UI is a name field, a **show-once card** (`<code>` + "shown only now"), and 
 | Caller | Keep the token in | Notes |
 |---|---|---|
 | CLI | env var `<APP>_PAT` (+ `<APP>_BASE_URL` to aim at dev) | never argv (visible in `ps`), never a committed file; `whoami` is the smoke test (mazuoboeru `mzo`) |
-| Another Worker, **your** account only | `wrangler secret put <RECEIVER>_PAT` + the URL as a `vars` entry | the personal-use shape of "quiz app → diary app": a Cron builds the day's post and `fetch`es with Bearer |
+| Another Worker, **your** account only | `wrangler secret put <RECEIVER>_PAT` + the URL as a `vars` entry | the personal-use shape of "quiz app → diary app": a Cron builds the day's post and `fetch`es with Bearer. **Needs `"compatibility_flags": ["global_fetch_strictly_public"]` on the SENDER when both Workers share a zone (e.g. the same `<account>.workers.dev`) — see the trap below** |
 | Another app, **per user** | its own DB, **encrypted** (AES-GCM under a Worker Secret), not hashed — it has to send it | plus a delivery ledger for idempotency; a separate skill (`cloudflare-workers-outbound-integration`, planned) |
 | AI agent in a sandbox | the sandbox's env | the token crosses the isolation boundary on purpose — grant the narrowest scope and revoke when the job is done |
+
+### Trap: a Worker cannot `fetch` a sibling Worker on the same zone — it gets a 404 that never reached the receiver (error 1042)
+
+Two Workers on the same zone — which includes every Worker of one account on `<account>.workers.dev` — cannot call each other with the global `fetch()` unless the **sender** has the `global_fetch_strictly_public` compatibility flag. Without it Cloudflare does not route the request to the other Worker at all; it answers `404` with the body `error code: 1042` ("Worker tried to fetch from another Worker on the same zone, which is only supported when the `global_fetch_strictly_public` compatibility flag is used"). The flag is not switched on by any compatibility date.
+
+Measured (mazuoboeru → kokemusu, 2026-09-05 → 2026-09-21): a nightly Cron push "went live", and not one request ever arrived — for 16 days. What it looked like from each side, and why nobody noticed:
+
+- The smoke test on the day the PAT was minted was a `curl` from a laptop. That travels the public Internet, so it worked and "the wiring is done" went into the status doc. **A `curl` that works proves nothing about a Worker-to-Worker `fetch`: the route is different.**
+- The sender's boundary logged only the status. `POST /api/posts -> 404` reads like an application 404. Log the first ~160 characters of the **response** body on any non-2xx (never the token, never the request body): `error code: 1042` names itself.
+- Unit tests and contract tests replace `fetch`, so platform routing is invisible to them by construction. Only a production measurement sees it.
+- The receiver's token row told the truth the whole time: `last_used_at` still showed the minting day. Two hand-written posts carrying the sender's provenance tag were later mistaken for proof that the Cron worked — their `created_at` was 17:30 and 23:56, not 00:15.
+
+So, for an app-to-app push between your own Workers:
+
+```jsonc
+// sender's wrangler.jsonc
+"compatibility_flags": ["global_fetch_strictly_public"],
+```
+
+and make this the definition of done, not an optional follow-up: after the first scheduled run in production, (a) the sender's log says `-> 201`, (b) the receiver's `api_token.last_used_at` moved, (c) the row exists **with a `created_at` inside the Cron's minute**. `wrangler tail` on both Workers across the tick shows (a) and whether the request arrived at all.
+
+A Service Binding also avoids 1042, but it ties the sender to the receiver's deployment and stops the receiver being "anyone with a PAT, from anywhere"; keep the HTTP contract and set the flag.
 
 Receiver-side contract for app-to-app pushes: one route (`POST /api/posts`), one write scope (`post:write`), a body with no sender-specific fields, and — if the caller retries on failure — an `Idempotency-Key` header the receiver remembers for 24 h (design note; not in the source project).
 
