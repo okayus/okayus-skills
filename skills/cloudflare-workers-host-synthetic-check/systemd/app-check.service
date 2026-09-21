@@ -3,5 +3,8 @@ Description=Daily synthetic check of deployed apps (health + WebAuthn rpId), see
 
 [Service]
 Type=oneshot
+# Pipelines call the projects' wrangler, whose .bin shim execs `node`: a systemd user
+# unit has a minimal PATH, so name the directory of the node you want.
+Environment=PATH=%h/.local/share/mise/installs/node/lts/bin:/usr/local/bin:/usr/bin:/bin
 ExecStart=%h/.local/share/mise/installs/node/lts/bin/node %h/.config/app-check/app-check.mjs
 TimeoutStartSec=5min
