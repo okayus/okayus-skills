@@ -123,20 +123,54 @@ const bindSql = (sql, { startMs, endMs, date }) =>
 
 // One read-only count through the project's own wrangler (never `pnpm exec` / `npx` on
 // the host). The SQL must return a single row with a column named `n`.
+//
+// Retried once: the first API call right after wrangler has refreshed an expired OAuth
+// access token can fail with 7403 "The given account is not valid or is not authorized
+// to access this service" (wrangler 3.114, reproduced 2026-09-27 under this unit's
+// environment — the token file was already rewritten, and the next call succeeded). A
+// daily timer meets an expired token every morning, so without the retry this check
+// stopped judging on five mornings out of six while printing only "exited 1:".
+const RETRY_DELAY_MS = 5_000;
 const d1Count = ({ cwd, database, sql }, window) => {
   const bin = join(cwd, "node_modules/.bin/wrangler");
   if (!existsSync(bin)) throw new Error(`${bin} not found`);
-  const r = spawnSync(bin, ["d1", "execute", database, "--remote", "--json", "--command", bindSql(sql, window)], {
-    cwd,
-    encoding: "utf8",
-    timeout: 120_000,
-    env: { ...process.env, WRANGLER_SEND_METRICS: "false", NO_COLOR: "1" },
-  });
-  if (r.status !== 0) throw new Error(`wrangler d1 execute ${database} exited ${r.status}: ${(r.stderr ?? "").trim().split("\n").at(-1)}`);
+  const args = ["d1", "execute", database, "--remote", "--json", "--command", bindSql(sql, window)];
+  const run = () =>
+    spawnSync(bin, args, {
+      cwd,
+      encoding: "utf8",
+      timeout: 120_000,
+      env: { ...process.env, WRANGLER_SEND_METRICS: "false", NO_COLOR: "1" },
+    });
+  let r = run();
+  // A timeout (status null) is not retried: a second 120 s would eat the unit's budget too.
+  if (r.status !== 0 && r.status !== null) {
+    sleepSync(RETRY_DELAY_MS);
+    r = run();
+  }
+  if (r.status !== 0) throw new Error(`wrangler d1 execute ${database} exited ${r.status}: ${describeFailure(r)}`);
   const n = JSON.parse(r.stdout)?.[0]?.results?.[0]?.n;
   if (typeof n !== "number") throw new Error(`${database}: the SQL must return one row with a numeric column "n"`);
   return n;
 };
+
+// With `--json`, wrangler prints its error as JSON on STDOUT and leaves stderr empty. The
+// first version of this script quoted stderr only, so every failure read as "exited 1:"
+// with nothing after the colon — the 7403 above stayed invisible for a week.
+const describeFailure = (r) => {
+  const stdout = (r.stdout ?? "").trim();
+  const stderr = (r.stderr ?? "").trim();
+  try {
+    const err = JSON.parse(stdout)?.error;
+    if (err) return [err.text, ...(err.notes ?? []).map((note) => note?.text)].filter(Boolean).join(" | ");
+  } catch {
+    // not JSON — fall through to the last line of whatever was printed
+  }
+  const lastLine = (text) => text.split("\n").filter((line) => line.trim() !== "").at(-1) ?? "";
+  return lastLine(stderr) || lastLine(stdout) || (r.error ? r.error.message : "(no output)");
+};
+
+const sleepSync = (ms) => Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
 
 const checkPipeline = (pipeline, date, nowMs) => {
   const window = dayWindow(date, pipeline.utcOffsetHours, nowMs);
