@@ -1,11 +1,11 @@
 ---
 name: snr-writing
-description: Reader model and compression criteria for Japanese explanations, answers and self-review / acceptance write-ups aimed at a reader who prefers established terminology and asks about anything unfamiliar. Use when the requester asks to explain a concept or a book chapter, answer a technical question, or write a self-review / acceptance document, and whenever they say "S/N", "圧縮して" or "短く". Lowers extraneous cognitive load without dumbing down the subject. Not for book or article manuscripts, which follow their medium's own style guide.
+description: Reader model and compression criteria for Japanese explanations, answers, self-review / acceptance write-ups, and code comments, aimed at a reader who prefers established terminology and asks about anything unfamiliar. Use when the requester asks to explain a concept or a book chapter, answer a technical question, write a self-review / acceptance document, or write or rewrite code comments (JSDoc, inline comments) and commit messages, and whenever they say "S/N", "圧縮して" or "短く". Lowers extraneous cognitive load without dumbing down the subject. Not for book or article manuscripts, which follow their medium's own style guide.
 license: MIT
 compatibility: Designed for Claude Code (or similar products).
 metadata:
   author: okayus
-  version: "0.1.0"
+  version: "0.2.0"
 ---
 
 # 読者に合わせて圧縮する
@@ -28,6 +28,15 @@ metadata:
 - 一文一義。圧縮するのは文の数であって文法ではない。主語と述語を省かない。表のセルは断片でよい。箇条書きは文で書く。
 - 確信度の較正。言い切りの強さを根拠に合わせ、実測・出典・推測を書き分ける。
 
+## コードコメント
+
+読者は、落ちたとき・直すときにそのファイルを開く保守者である。経緯を知りたいときは git log を引く。
+
+- 残す。コードが依存する不変条件と、それが成り立つ版の範囲（例: Element Plus 2.14 の select は automatic-dropdown なしではフォーカスで開かない）。コードから読み取れない「なぜそうしたか」。
+- 削る。旧版との比較や変更の経緯はコミットメッセージへ。コードや expect のメッセージの言い直し。同じ趣旨の定型文の繰り返し（ファイル内に既にあれば書かない）。入れ子の丸括弧。
+- 目安。追加差分でコメント行がコード行を超えたら見直す。圧縮したあとは事実関係を機械レビューで確かめる（「閉じていても」を「閉じても」に縮めて意味がずれた例がある）。
+- コミットメッセージは逆で、経緯と判断の根拠を書く場所である。
+
 ## 原稿との関係
 
-書籍や記事の原稿には、その媒体の文章規範を優先する。この skill は会話の解説と検収文書の生成に使う。
+書籍や記事の原稿には、その媒体の文章規範を優先する。この skill は会話の解説、検収文書、コードコメントとコミットメッセージに使う。
