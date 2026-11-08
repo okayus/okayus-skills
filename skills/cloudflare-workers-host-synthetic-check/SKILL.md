@@ -2,7 +2,7 @@
 name: cloudflare-workers-host-synthetic-check
 description: Catch "the app answers 200 but nobody can log in" within a day with a credential-free daily check from the developer's machine (a systemd user timer). It asserts `/health`, that the WebAuthn `rpId` from each app's login-begin endpoint still matches the host it is served from, and that a Cron-driven push between your apps arrived (pipelines, two read-only D1 counts through the host's `wrangler login`). Use after any account-, domain- or subdomain-level change, when several small passkey apps share one Cloudflare account, when a nightly app-to-app push may be failing silently, or when the only monitoring is "someone will tell me".
 license: MIT
-compatibility: Designed for Claude Code and similar agents. Targets a Linux host with systemd user units and Node 20+ (global `fetch`, `AbortSignal.timeout`). The app checks call only public endpoints. Pipelines additionally need each project's `node_modules/.bin/wrangler` and a host-side `wrangler login` (read-only `d1 execute --remote`); nothing is stored.
+compatibility: Designed for Claude Code and similar agents. Targets a Linux host with systemd user units and Node 22+ (global `fetch`, `AbortSignal.timeout`); the unit template names a mise-installed node and the Install step rewrites it. The app checks call only public endpoints. Pipelines additionally need each project's `node_modules/.bin/wrangler` and a host-side `wrangler login` (read-only `d1 execute --remote`); nothing is stored.
 metadata:
   author: okayus
   version: "0.2.0"
@@ -29,13 +29,18 @@ Measured cost (2026-06-12 → 2026-09): renaming the account's workers.dev subdo
 ## Install
 
 ```sh
-SKILL=~/.claude/skills/cloudflare-workers-host-synthetic-check
+SKILL=<the directory of this SKILL.md>   # Claude Code personal scope: ~/.claude/skills/cloudflare-workers-host-synthetic-check
 install -d -m 700 ~/.config/app-check
 install -m 644 $SKILL/scripts/app-check.mjs ~/.config/app-check/
 $EDITOR ~/.config/app-check/apps.json
 node ~/.config/app-check/app-check.mjs
 
+install -d ~/.config/systemd/user
 install -m 644 $SKILL/systemd/app-check.{service,timer} ~/.config/systemd/user/
+# the unit names a mise-installed node; point it at the node you just ran
+NODE=$(node -p process.execPath)
+sed -i -e "s|%h/.local/share/mise/installs/node/lts/bin/node|$NODE|" \
+       -e "s|%h/.local/share/mise/installs/node/lts/bin|$(dirname "$NODE")|" ~/.config/systemd/user/app-check.service
 systemctl --user daemon-reload && systemctl --user enable --now app-check.timer
 systemctl --user start app-check.service && journalctl --user -u app-check.service -n 10 -o cat
 ```
@@ -51,7 +56,7 @@ systemctl --user start app-check.service && journalctl --user -u app-check.servi
 }
 ```
 
-`passkeyBegin` is whichever unauthenticated route returns `PublicKeyCredentialRequestOptions` (`/login/begin`, `/login/options`, …). The script looks for `rpId` anywhere in the JSON, so both `{ rpId }` and `{ options: { rpId } }` work. Leave it out for apps without passkeys.
+`passkeyBegin` is whichever unauthenticated route returns `PublicKeyCredentialRequestOptions` (`/login/begin`, `/login/options`, …). The script POSTs `{}` and looks for `rpId` anywhere in the JSON, so both `{ rpId }` and `{ options: { rpId } }` work. Leave it out for apps without passkeys, for routes that only answer GET, and for apps whose options omit `rpId` (the browser then uses the current host, so there is nothing stale to catch).
 
 ## Pipelines: did yesterday's push arrive?
 
@@ -87,7 +92,7 @@ A Cron Trigger that POSTs to a sibling app is invisible from outside: the sender
 1. **The rpId rule is "equal or registrable suffix", not "equal".** `app.example.com` served with `rpId: "example.com"` is valid; the script accepts `host === rpId || host.endsWith("." + rpId)`. It does not consult the public-suffix list, so `rpId: "workers.dev"` would pass here while a browser rejects it. Nobody configures that by accident; the failure this exists for is a stale full hostname.
 2. **Send `Origin`.** Apps that require `Origin === ORIGIN` on non-GET `/api/*` answer 403 to a bare `curl -X POST`. The script sends `origin: <origin>`.
 3. **One probe a day stays far below an auth rate limit.** Do not turn this into a minute-level uptime monitor: the login-begin route is exactly the one that is rate limited per IP, and a challenge-issuing endpoint is not a health endpoint.
-4. **Schedule it for the day.** The alert is `notify-send`; a 04:00 notification on a sleeping machine is read by nobody. `Persistent=true` covers days the machine was off. For alerts when nobody is logged in, set `APP_CHECK_DISCORD_WEBHOOK` in the unit (`Environment=`) and `loginctl enable-linger $USER`.
+4. **Schedule it for the day.** The alert is `notify-send`; a 04:00 notification on a sleeping machine is read by nobody. `Persistent=true` covers days the machine was off. For alerts when nobody is logged in, put `APP_CHECK_DISCORD_WEBHOOK=<url>` in `~/.config/app-check/env` (`chmod 600`; the unit reads it with `EnvironmentFile=`, not `Environment=`, because a webhook URL is a credential and the unit file is 0644) and run `loginctl enable-linger $USER`. The systemd user unit traps (minimal `PATH`, linger) are the same as in `cloudflare-d1-keyless-host-backup`.
 5. **Add the app on the day it gets its first passkey**, not later. The check is only as complete as `apps.json`.
 6. **The first `wrangler` call after the OAuth token expired can fail with 7403, and with `--json` the reason lands on stdout.** A daily timer meets an expired access token every morning; wrangler (3.114 measured, 2026-09-27) refreshes it, rewrites `~/.config/.wrangler/config/default.toml`, and the very next API call can still answer `7403 "The given account is not valid or is not authorized to access this service"` — the call after that succeeds. And because `--json` reports errors as JSON on **stdout**, a script that quotes stderr sees only `exited 1:`. The script retries the count once after 5 s (not after a timeout) and quotes `error.text` + `notes` from stdout. Between 2026-09-22 and 09-29 this combination silently left five of seven mornings unjudged while the very push it watches was failing.
 
@@ -98,4 +103,4 @@ A Cron Trigger that POSTs to a sibling app is invisible from outside: the sender
 
 ## When you change something account-wide
 
-Before renaming a subdomain, moving to a custom domain, or changing an OAuth callback host: `grep -rn "<old-host>" ~/src/*/` across **every** repo, not just the one you are in. `RP_ID`, `ORIGIN`, OAuth callbacks, firewall allowlists and notification links all carry the host name, and a passkey app cannot change `RP_ID` without re-registering every user.
+Before renaming a subdomain, moving to a custom domain, or changing an OAuth callback host: `grep -rn "<old-host>" ~/src/*/` across **every** repo, not just the one you are in. `RP_ID`, `ORIGIN`, OAuth callbacks, firewall allowlists and notification links all carry the host name, and a passkey app cannot change `RP_ID` without re-registering every user (the forced-change runbook is in `cloudflare-workers-passkey-auth`).
