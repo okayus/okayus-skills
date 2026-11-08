@@ -71,14 +71,14 @@ Skill-specific breaking changes bump the repo's major version. Additive refineme
 
 ## Validating locally
 
-Skills are validated with `gh skill publish --dry-run`:
+From the repository root:
 
 ```bash
-cd ~/dev/okayus-skills
-gh skill publish --dry-run
+python3 scripts/check-skills.py   # spec limits (name, description ≤ 1,024 chars, compatibility ≤ 500) and strict-YAML safety; CI runs it on every PR
+gh skill publish --dry-run        # gh's own checks before a release
 ```
 
-Checks: name matches directory, required frontmatter, etc. See [spec](https://agentskills.io/specification).
+`check-skills.py` also rejects `: ` and ` #` inside plain (unquoted) frontmatter values: Claude Code tolerates them, but a strict YAML parser drops the whole frontmatter, and with it the description. See [spec](https://agentskills.io/specification).
 
 ## License
 

@@ -128,21 +128,23 @@ output to expect: `chromium-<rev>/`, `chromium_headless_shell-<rev>/`, `ffmpeg-<
    install chromium'` — and move the pin (and `@playwright/test`) to a version that
    completes, rather than retrying the build or suspecting the CDN.
 
-5. **`--no-sandbox`, gated on the devcontainer.** The container has `NET_ADMIN`/`NET_RAW`
-   (for the firewall) but **not** `SYS_ADMIN` / user-namespace cloning, so Chromium's
-   setuid sandbox can't initialize and the browser won't launch. Disable it **only**
-   in-container, keying off the devcontainer marker so the host keeps the real sandbox:
+5. **Chromium's sandbox is already off.** The container has `NET_ADMIN`/`NET_RAW` (for the
+   firewall) but not `SYS_ADMIN` / user-namespace cloning, so Chromium's setuid sandbox
+   could not initialize. Playwright launches Chromium without it by default
+   (`chromiumSandbox` defaults to `false`, https://playwright.dev/docs/api/class-browsertype,
+   checked 2026-11-08), so the browser starts with no extra flag, on the host as well.
+   Running unsandboxed is acceptable here because the browser only ever loads your own
+   `127.0.0.1` app. To sandbox host runs, turn it on outside the container only:
 
    ```typescript
    // playwright.config.ts — Dockerfile sets ENV DEVCONTAINER=true
    use: {
      ...devices["Desktop Chrome"],
-     launchOptions: process.env.DEVCONTAINER ? { args: ["--no-sandbox"] } : {},
+     launchOptions: { chromiumSandbox: !process.env.DEVCONTAINER },
    }
    ```
 
-   This is safe here because the browser only ever loads your own `127.0.0.1` app — but
-   keep the gate so you never silently weaken the browser sandbox on a real machine.
+   UNVERIFIED: a host run with `chromiumSandbox: true` has not been measured yet.
 
 ### How to confirm the bake worked
 

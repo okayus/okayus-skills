@@ -114,11 +114,11 @@ export async function sweepOrphans(env: Bindings): Promise<{ deleted: string[] }
 
 Variants created by the Images-binding path (`<key>/w640`) are *not* in `known` — either add them to the row, or treat any key that starts with a known key + `/` as owned (`[...known].some((k) => key.startsWith(k + "/"))`).
 
-## Backup workflow sketch (only if the ADR chose "sync")
+## Backup workflow sketch (only if the ADR chose a second bucket)
 
 Never run in the source projects — UNVERIFIED end to end; one successful dry run is required before trusting it.
 
-1. Create an R2 **API token** (not an account API token): Dashboard → R2 → Manage R2 API Tokens → Object Read on the live bucket, Object Read & Write on the backup bucket. Save the Access Key ID / Secret Access Key as repo secrets
+1. Create an R2 API token with Object Read on the live bucket and Object Read & Write on the backup bucket (R2 → API tokens; the current labels are in https://developers.cloudflare.com/r2/api/tokens/). Save the Access Key ID / Secret Access Key as repo secrets. UNVERIFIED: whether one token can carry different permissions per bucket
 2. The S3 endpoint is `https://<account_id>.r2.cloudflarestorage.com`
 
 ```yaml
@@ -126,23 +126,24 @@ Never run in the source projects — UNVERIFIED end to end; one successful dry r
 name: r2-backup
 on:
   schedule:
-    - cron: "0 18 * * 0" # Sunday 03:00 JST — cron is UTC, see cloudflare-d1-weekly-backup-via-pr
+    - cron: "0 18 * * 6" # Saturday 18:00 UTC = Sunday 03:00 JST — cron is UTC, see cloudflare-d1-weekly-backup-via-pr
   workflow_dispatch:
 jobs:
   sync:
     runs-on: ubuntu-latest
     steps:
       - run: curl -fsSL https://rclone.org/install.sh | sudo bash
-      - run: rclone sync r2:<app>-photos r2:<app>-photos-backup --checksum --stats-one-line
+      - run: rclone copy r2:<app>-photos r2:<app>-photos-backup --checksum --stats-one-line
         env:
           RCLONE_CONFIG_R2_TYPE: s3
           RCLONE_CONFIG_R2_PROVIDER: Cloudflare
           RCLONE_CONFIG_R2_ENDPOINT: https://${{ secrets.CF_ACCOUNT_ID }}.r2.cloudflarestorage.com
           RCLONE_CONFIG_R2_ACCESS_KEY_ID: ${{ secrets.R2_BACKUP_ACCESS_KEY_ID }}
           RCLONE_CONFIG_R2_SECRET_ACCESS_KEY: ${{ secrets.R2_BACKUP_SECRET_ACCESS_KEY }}
+          RCLONE_CONFIG_R2_NO_CHECK_BUCKET: "true" # required with Object-level token permissions (developers.cloudflare.com/r2/examples/rclone/)
 ```
 
-`sync` mirrors deletions too — a deleted photo disappears from the backup on the next run. If the point of the backup is to survive *accidental* deletes, use `rclone copy` (additive) and a bucket lock or lifecycle rule on the backup bucket instead. Restore is the same command with the remotes swapped, followed by a D1 restore from the matching weekly export.
+`copy` is additive: a photo deleted from the live bucket stays in the backup. `rclone sync` would mirror the deletion on its next run, so it protects against an accidental delete only until then. Put a bucket lock or a lifecycle rule on the backup bucket so the backup itself can't be wiped, and let the lifecycle rule expire what the app has deleted. Restore is the same command with the remotes swapped, followed by a D1 restore from the matching weekly export.
 
 ## Runbook
 

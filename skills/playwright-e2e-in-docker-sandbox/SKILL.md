@@ -1,11 +1,11 @@
 ---
 name: playwright-e2e-in-docker-sandbox
-description: Run a Playwright e2e suite fully inside a network-isolated Docker sandbox (the claude-code-docker-sandbox setup — egress firewall, no host browser, no Cloudflare login) with zero runtime egress and zero credentials. The move — bake Chromium into the image at build time (build runs before the firewall), so the runtime allowlist needs no new entry. Use when e2e must run in-container (Playwright CDN blocked, `browser not found`), or when a credential-free `wrangler dev` accepts TCP but every request hangs — the two sandbox-only traps are a rate-limit binding proxying to a remote Cloudflare resource whose handshake never completes without credentials (the wrangler 3.x `unsafe` form — the v4 top-level `ratelimits` key is simulated locally as of wrangler 4.125, verified 2026-09-02, so stripping it is now belt-and-braces), and a `localhost` bind stalling on IPv4/IPv6 dual-stack resolution (bind `--ip 127.0.0.1` end to end). Covers the Dockerfile bake block (plus the variant both production users actually run: explicit apt list, `npx playwright install chromium` as `node`, CJK fonts), `--no-sandbox` gated on DEVCONTAINER, exact version pinning (a blocked CDN can't self-heal drift), stripping rate limits from the built e2e config, and neutralising the `.dev.vars` copy that `@cloudflare/vite-plugin` 1.x writes into `dist/<worker>/` (wrangler reads it from the config's directory and it overrides `vars`; CLI `--var` outranks it).
+description: Run a Playwright e2e suite inside the network-isolated claude-code-docker-sandbox container with zero runtime egress and no credentials, by baking Chromium into the image at build time (the build runs before the firewall). Use when e2e must run in the container (Playwright CDN blocked, `browser not found`), or when a credential-free `wrangler dev` accepts the connection but every request hangs, caused by a rate-limit binding proxying to a remote Cloudflare resource (the wrangler 3.x `unsafe` form) or a `localhost` bind stalling on dual-stack resolution (bind `--ip 127.0.0.1`). Covers the Dockerfile bake block, `--no-sandbox` gated on DEVCONTAINER, exact version pinning, and neutralising the `.dev.vars` copy the vite plugin writes into dist.
 license: MIT
 compatibility: Designed for Claude Code and similar agents. Assumes the `claude-code-docker-sandbox` environment (Docker Compose, default-deny egress firewall, bind-mounted repo) and a Playwright suite that targets a local `wrangler dev` server — typically wired per `cloudflare-workers-e2e-playwright`. The bake recipe installs Chromium; adapt for other browsers.
 metadata:
   author: okayus
-  version: "0.2.0"
+  version: "0.2.1"
 ---
 
 # Playwright e2e inside the Docker sandbox (credential-free, zero runtime egress)
@@ -47,8 +47,8 @@ Do **not** use for:
       runtime egress, no `init-firewall.sh` change
 - [ ] `ARG PLAYWRIGHT_VERSION` **exactly equals** `@playwright/test` in `package.json`,
       and both are bumped together (rebuild after)
-- [ ] Chromium `--no-sandbox` gated on the `DEVCONTAINER` env marker — host runs keep the
-      real browser sandbox
+- [ ] Chromium's sandbox left at Playwright's default (off) inside the container; to
+      sandbox host runs, `chromiumSandbox: !process.env.DEVCONTAINER`
 - [ ] The built e2e config **strips the rate-limit binding** (`unsafe` *and* `ratelimits` — the
       v4 key no longer hangs, see Trap 1, but stripping keeps e2e independent of the limiter)
 - [ ] The `.dev.vars` copy that `@cloudflare/vite-plugin` 1.x writes into `dist/<worker>/` is
@@ -99,13 +99,18 @@ chromium` **as `node`** after the Claude install, so the browser lands in
 `PLAYWRIGHT_BROWSERS_PATH` / `chmod` dance is needed. The exact block is in the reference
 next to the canonical one; both keep `PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1` and the pin.
 
-Gate Chromium's own sandbox off **only in-container** (the container has `NET_ADMIN` but
-not `SYS_ADMIN`, so the setuid sandbox can't initialize):
+Playwright launches Chromium without its sandbox by default (`chromiumSandbox` defaults to
+`false`, https://playwright.dev/docs/api/class-browsertype), which is why it starts in the
+container at all: the container has `NET_ADMIN` but not `SYS_ADMIN`, so Chromium's setuid
+sandbox could not initialize. No `--no-sandbox` flag is needed. To keep the browser sandbox
+on host runs, turn it on outside the container only:
 
 ```typescript
 // playwright.config.ts — the sandbox Dockerfile sets ENV DEVCONTAINER=true
-launchOptions: process.env.DEVCONTAINER ? { args: ["--no-sandbox"] } : {},
+launchOptions: { chromiumSandbox: !process.env.DEVCONTAINER },
 ```
+
+UNVERIFIED: a host run with `chromiumSandbox: true` has not been measured yet.
 
 This is the same build-time-vs-runtime-network pattern as the Rust/Haskell toolchains in
 `claude-code-docker-sandbox`: compiler at build time = no allowlist entry; deps at runtime

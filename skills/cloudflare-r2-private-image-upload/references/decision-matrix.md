@@ -49,7 +49,7 @@ R2 offers no point-in-time recovery. Bucket locks prevent deletion for a retenti
 | Option | Protects against | Cost / complexity | When it's the right answer |
 |---|---|---|---|
 | **Accept the risk** (the phones' camera rolls keep the originals; the app stores downscaled copies) | nothing on the Cloudflare side | 0 | A meal log where the app is a *view* of photos that also live elsewhere — the honest default for matatabetai |
-| `rclone sync` live bucket → a second R2 bucket, weekly GitHub Actions cron, R2 S3 API token (two new repo secrets) | app bugs, accidental deletes, a wiped bucket | one workflow + `Account → R2 → Manage R2 API Tokens` (object read on the source, write on the target); same account so **not** account loss | Photos that exist nowhere else |
+| `rclone copy` (additive) live bucket → a second R2 bucket with a bucket lock or lifecycle rule, weekly GitHub Actions cron, R2 S3 API token (two new repo secrets) | app bugs, accidental deletes, a wiped bucket (`rclone sync` would mirror the deletion on its next run, so it protects only until then) | one workflow + an R2 API token (object read on the source, write on the target); same account so **not** account loss | Photos that exist nowhere else |
 | `rclone sync` to another provider (B2 / S3 / Drive) | Cloudflare account loss | R2 egress is free; the other side charges for storage | Irreplaceable archives |
 | Bucket lock on the **backup** bucket only | deletion of the backup itself | a retention rule | Pairs with either sync option |
 | App-level export (zip of a space's photos + JSON) served by the Worker | gives the family a way out | a route that streams `list({ prefix })` objects | When "I want my data" matters more than disaster recovery |

@@ -223,14 +223,47 @@ Starting from the `cloudflare-mcp-claude-tooling` template:
       "Bash(git push *main)",          // ends in main: `origin main`, `HEAD:main`, `HEAD:refs/heads/main`
       "Bash(git push *main *)",        // same with trailing flags
       "Bash(git push * --delete *)",
-      "Bash(git push * :*)",           // the OTHER delete form: `git push origin :claude/x`
+      // The OTHER delete form, `git push origin :claude/x`, can't be a deny rule: a pattern ending
+      // in ":*" is read as the legacy prefix syntax ("The `:*` form is only recognized at the end of
+      // a pattern", code.claude.com/docs/en/permissions). Block it with the PreToolUse hook below.
       "Bash(gh pr merge *)",          // drop this line (and add the --auto form to allow) for opt-in agent merges
       "Bash(gh auth *)",              // no `gh auth login` (stores a token), no `gh auth token` (prints it)
       "Bash(gh api *)"                // the merge endpoint is one PUT away; read CI via `gh pr checks`
     ]
   },
-  "enableAllProjectMcpServers": false
+  "enableAllProjectMcpServers": false,
+  "hooks": {
+    "PreToolUse": [
+      { "matcher": "Bash",
+        "hooks": [{ "type": "command", "command": "${CLAUDE_PROJECT_DIR}/.claude/hooks/guard-push-delete.sh", "args": [] }] }
+    ]
+  }
 }
+```
+
+`.claude/hooks/guard-push-delete.sh` (`chmod +x`; hooks run under `bypassPermissions` too, and exit 2 blocks the call):
+
+```bash
+#!/usr/bin/env bash
+# PreToolUse(Bash): block git push's delete form (":<branch>" / "+:<branch>" refspecs).
+set -u
+set -f
+input=$(cat)
+case "$input" in *"git"*"push"*) ;; *) exit 0 ;; esac
+command -v jq >/dev/null 2>&1 || { echo "guard-push-delete: no jq to inspect git push" >&2; exit 2; }
+cmd=$(jq -r '.tool_input.command // empty' <<<"$input")
+cmd=${cmd//[;&|]/ ; }       # separators glued to a word ("x;") and newlines end a command too
+cmd=${cmd//$'\n'/ ; }
+seen_git=0 in_push=0
+for tok in $cmd; do
+  case "$tok" in
+    ";") seen_git=0 in_push=0 ;;
+    git) seen_git=1 ;;
+    push) [ "$seen_git" -eq 1 ] && in_push=1 ;;
+    :* | +:*) [ "$in_push" -eq 1 ] && { echo "guard-push-delete: no remote branch deletion ($tok)" >&2; exit 2; } ;;
+  esac
+done
+exit 0
 ```
 
 Rules to keep in mind (Claude Code permissions docs, 2026-08-22): a deny rule matches regardless of a narrower allow; `*` spans spaces, so `Bash(git push origin claude/*)` also matches `git push origin claude/x:main` — **the ruleset rejects that push, the rule doesn't**; patterns constraining arguments are documented as fragile; deny rules still apply in `bypassPermissions` mode while **allow rules have no effect there** (permission-modes docs) — so inside the container (bypass by default) only the `deny` list acts, and the `allow` list is for host / non-bypass sessions on the same repo. Pushing the head of an open, rule-satisfying PR to `main` is *allowed* by GitHub — it is the merge (verified 2026-08-22) — which is why the refspec forms are denied here too. Treat this list as keeping the well-behaved agent on the rails, nothing more.

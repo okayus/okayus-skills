@@ -14,7 +14,7 @@
 1. SKILL.md は 500 行以下か（出典: https://code.claude.com/docs/en/skills.md）
 2. progressive disclosure: SKILL.md は本質だけに絞れているか。長い手順・コード全文・診断詳細は references/ に置かれ、SKILL.md から明示的にリンクされているか。逆に references/ にしか無い致命的な注意が SKILL.md から発見不能になっていないか
 3. frontmatter: Agent Skills spec のフィールドのみ使っているか。Claude Code 専用フィールドが混ざっていたら移植性の問題として指摘（正確なフィールド区分は起動プロンプトの「検証済みフィールド区分」を正とする）
-4. description: 第三者視点で「いつ発動すべきか」が判る具体性があるか（症状・エラーメッセージ・ユースケースのトリガー語を含むか）
+4. description: 第三者視点で「いつ発動すべきか」が判る具体性があるか（症状・エラーメッセージ・ユースケースのトリガー語を含むか）。字数の上限と YAML の構文は `python3 scripts/check-skills.py`（CI でも走る）が検査するので、所見にするのは中身だけ
 5. SKILL.md 本文と references/ のテンプレート・コードが矛盾していないか
 
 ## 観点 (b) 陳腐化 — 上流変化との照合
@@ -36,6 +36,18 @@
 - 500 行超過は自動的に分割候補
 - 逆パターンも見る: 他 skill と明らかに重複していて統合・相互参照すべき内容（リポジトリの skill 一覧は起動プロンプトで渡される）
 
+## 観点 (d) 古いモデル向けの指示 — 現行モデルとの照合
+
+現行モデルは平易な一文に従い、強調や細かすぎる指示はかえって規則の過剰適用を招く。出典: https://code.claude.com/docs/en/best-practices の "What you can stop doing"、https://platform.claude.com/docs/en/build-with-claude/prompt-engineering/claude-prompting-best-practices（モデル別の指針）。skill の大半を占める実測の罠と環境固有の知識は、モデルがコードから推測できないので削る対象ではない。
+
+1. 強調: IMPORTANT / MUST / CRITICAL / 全大文字、太字の多用。外すと意味が変わる箇所以外の強調を所見にする。曲げられない規則には hook・deny・スクリプトへ移す案を出す
+2. 細かすぎる手順: 順序に意味がある定型作業と環境固有の操作以外で、現行モデルが自力でできる判断まで番号付きで縛っていないか
+3. 旧モデルの弱さへの回避策: 「続けろ」「よく考えよ」「全部読め」の類や、特定モデルの癖への対処。どのモデルのどの失敗のためかが書かれていないものは、出自を書くか消す案を出す
+4. 例の羅列: 使い方の例を並べて探索の範囲を狭めていないか
+5. description の中身: 先頭に「何を・いつ使うか」があるか。版の注記・検証の経緯・罠の詳細が入っていないか（本文か README へ移す）
+
+(d) の所見は原則 med か low。従うと壊れる場合だけ high にする。
+
 ## 出力フォーマット（これ以外を返さない・全体で最大 120 行）
 
 ```
@@ -45,7 +57,7 @@
 - verdict: keep | needs-update | split-candidate | needs-update+split
 
 ### findings
-- [a|b|c][high|med|low] <所見 1 行> | evidence: <file:line> | fix: <1 行修正案> | source: <URL>（b 軸は必須）| 要確認（該当時のみ）
+- [a|b|c|d][high|med|low] <所見 1 行> | evidence: <file:line> | fix: <1 行修正案> | source: <URL>（b 軸は必須）| 要確認（該当時のみ）
 （1 件 1 行厳守・重要度順・最大 12 件。所見の無い軸は書かない）
 
 ### notes

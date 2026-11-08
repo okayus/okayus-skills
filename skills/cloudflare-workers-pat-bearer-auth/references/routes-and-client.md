@@ -234,38 +234,33 @@ curl -s -X POST https://<host>/api/tokens -H "Authorization: Bearer $APP_PAT" \
 
 ### Another Worker, personal use (the "quiz app → diary app" push)
 
+Both Workers sit on one account's workers.dev, so the request travels over a Service Binding — a global `fetch()` gets `404 error code: 1042` and never reaches the receiver (the 1042 trap in SKILL.md; mazuoboeru #106 runs this shape).
+
 ```jsonc
 // sender's wrangler.jsonc
-"vars": { "KOKEMUSU_URL": "https://kokemusu.<subdomain>.workers.dev" }
+"vars": { "KOKEMUSU_URL": "https://kokemusu.<subdomain>.workers.dev" },
+"services": [{ "binding": "KOKEMUSU", "service": "kokemusu" }]
 // secret: `wrangler secret put KOKEMUSU_PAT` — minted in the receiver's settings UI with post:write only
 ```
 
 ```ts
 // sender: pure builder + throw-less boundary (cloudflare-cron-to-discord's architecture)
 const body = buildDailyPost(results, now); // pure
-await postWithBearer(`${env.KOKEMUSU_URL}/api/posts`, env.KOKEMUSU_PAT, body); // never throws; logs status only
+try {
+  const res = await env.KOKEMUSU.fetch(new Request(`${env.KOKEMUSU_URL}/api/posts`, {
+    method: "POST",
+    headers: { authorization: `Bearer ${env.KOKEMUSU_PAT}`, "content-type": "application/json" },
+    body: JSON.stringify(body),
+  }));
+  // the status, and on non-2xx the first ~160 chars of the response body — never the token or the request body
+  console.log(`[kokemusu] POST /api/posts -> ${res.status}${res.ok ? "" : ` ${(await res.text()).slice(0, 160)}`}`);
+} catch (e) {
+  console.log(`[kokemusu] push failed: ${String(e)}`);
+}
 ```
 
-## Receiver-side push endpoint (sketch — UNVERIFIED, kokemusu will be the first)
+## Receiver-side push endpoint
 
-```ts
-const postSchema = z.object({
-  title: z.string().trim().min(1).max(200),
-  tags: z.array(z.string().trim().min(1).max(50)).max(20),
-  body: z.string().max(20_000),
-  occurredAt: z.string().datetime().optional(), // the sender's event time; default now
-});
+kokemusu runs it: `POST /api/posts` behind `requireAuth` + `requireScope("post:write")` (#31, in production since 2026-09-03). Don't copy a body schema from a skill — the receiver publishes its contract as `docs/senders.md` plus a JSON Schema generated from its zod schema (SKILL.md, "The caller side: the contract").
 
-export const postsRouter = new Hono<Env>()
-  .post("/", requireAuth, requireScope("post:write"), async (c) => {
-    const user = requireUser(c);
-    const parsed = postSchema.safeParse(await c.req.json().catch(() => null));
-    if (!parsed.success) return c.json(apiError("invalid_body"), 400);
-    // Optional: `Idempotency-Key` header → (user_id, key) UNIQUE for 24 h, so a retrying
-    // sender can't double-post. Design note; not in the source project.
-    const post = await createPost(c.env, user.id, parsed.data);
-    return c.json({ post }, 201);
-  });
-```
-
-Nothing in the body says who sent it — that is the "receiver doesn't know the sender" contract. If the receiver wants to display a source, let the *sender* put it in `tags` or `title` by configuration.
+Nothing in the body says who sent it — that is the "receiver doesn't know the sender" contract. If the receiver wants to display a source, let the *sender* add a tag by configuration. A retrying sender needs an `Idempotency-Key` the receiver remembers for 24 h, so it can't double-post (design note; in neither project yet).

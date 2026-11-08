@@ -1,11 +1,11 @@
 ---
 name: cloudflare-workers-builds-keyless-deploy
-description: Deploy Cloudflare Workers from GitHub with ZERO Cloudflare credentials stored in GitHub (no CLOUDFLARE_API_TOKEN in Actions secrets), using Workers Builds — Cloudflare's git-connected CI/CD. Use when setting up or migrating a Workers project so that an autonomous agent pipeline never holds a Cloudflare secret, when asked "can we deploy without a CF API token in CI", or when driving the Cloudflare dashboard connect ceremony (by hand or with a browser agent). Covers the traps that cost hours — the custom token you made in My Profile NOT appearing in the build-token picker (use "Create new token" inside Advanced settings; it includes D1 Edit as of 2026-08 despite the docs), the picker defaulting to ANOTHER project's build token, Root directory hiding in the Advanced settings accordion (labelled "Path"), the *Create an app* wizard REFUSING the name of a Worker that already exists (connect from that Worker's own Settings → Builds instead — the exact case when migrating off GitHub Actions), the first build after connecting via the wizard being a manual build that posts NO "Workers Builds" check-run (not a missed trigger), preview builds sharing the PRODUCTION D1 database, Workers Builds NOT waiting for GitHub CI (gate with a branch ruleset instead), and skipping docs-only deploys with build watch paths.
+description: Deploy Cloudflare Workers from GitHub with no Cloudflare credential stored in GitHub (no CLOUDFLARE_API_TOKEN in Actions secrets) using Workers Builds, Cloudflare's git-connected CI/CD. Use when setting up or migrating a Workers project so an autonomous agent pipeline never holds a Cloudflare secret, when asked "can we deploy without a CF API token in CI", or when driving the dashboard connect ceremony by hand or with a browser agent. Covers the dashboard traps — a My Profile token missing from the build-token picker, the picker defaulting to another project's token, Root directory hidden under Advanced settings as "Path", the Create-an-app wizard refusing an existing Worker's name, the first build posting no check-run, preview builds sharing the production D1, Workers Builds not waiting for GitHub CI (gate with a ruleset), and build watch paths for docs-only commits.
 license: MIT
 compatibility: Designed for Claude Code and similar agents. Targets Cloudflare Workers (wrangler.jsonc) + D1 + pnpm monorepos, GitHub repos. Requires gh CLI for ruleset setup; dashboard access for the one-time ceremony (a browser-automation agent can drive it — see references/dashboard-walkthrough.md).
 metadata:
   author: okayus
-  version: "0.4.1"
+  version: "0.4.2"
 ---
 
 # Cloudflare Workers Builds: Keyless Deploy
