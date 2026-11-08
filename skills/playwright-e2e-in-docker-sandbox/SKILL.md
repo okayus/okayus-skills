@@ -47,8 +47,8 @@ Do **not** use for:
       runtime egress, no `init-firewall.sh` change
 - [ ] `ARG PLAYWRIGHT_VERSION` **exactly equals** `@playwright/test` in `package.json`,
       and both are bumped together (rebuild after)
-- [ ] Chromium `--no-sandbox` gated on the `DEVCONTAINER` env marker — host runs keep the
-      real browser sandbox
+- [ ] Chromium's sandbox left at Playwright's default (off) inside the container; to
+      sandbox host runs, `chromiumSandbox: !process.env.DEVCONTAINER`
 - [ ] The built e2e config **strips the rate-limit binding** (`unsafe` *and* `ratelimits` — the
       v4 key no longer hangs, see Trap 1, but stripping keeps e2e independent of the limiter)
 - [ ] The `.dev.vars` copy that `@cloudflare/vite-plugin` 1.x writes into `dist/<worker>/` is
@@ -99,13 +99,18 @@ chromium` **as `node`** after the Claude install, so the browser lands in
 `PLAYWRIGHT_BROWSERS_PATH` / `chmod` dance is needed. The exact block is in the reference
 next to the canonical one; both keep `PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1` and the pin.
 
-Gate Chromium's own sandbox off **only in-container** (the container has `NET_ADMIN` but
-not `SYS_ADMIN`, so the setuid sandbox can't initialize):
+Playwright launches Chromium without its sandbox by default (`chromiumSandbox` defaults to
+`false`, https://playwright.dev/docs/api/class-browsertype), which is why it starts in the
+container at all: the container has `NET_ADMIN` but not `SYS_ADMIN`, so Chromium's setuid
+sandbox could not initialize. No `--no-sandbox` flag is needed. To keep the browser sandbox
+on host runs, turn it on outside the container only:
 
 ```typescript
 // playwright.config.ts — the sandbox Dockerfile sets ENV DEVCONTAINER=true
-launchOptions: process.env.DEVCONTAINER ? { args: ["--no-sandbox"] } : {},
+launchOptions: { chromiumSandbox: !process.env.DEVCONTAINER },
 ```
+
+UNVERIFIED: a host run with `chromiumSandbox: true` has not been measured yet.
 
 This is the same build-time-vs-runtime-network pattern as the Rust/Haskell toolchains in
 `claude-code-docker-sandbox`: compiler at build time = no allowlist entry; deps at runtime

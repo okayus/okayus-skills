@@ -5,7 +5,7 @@ license: MIT
 compatibility: Designed for Claude Code and similar agents. Host = Linux/macOS with the Docker Compose plugin, 1Password CLI (`op`) and a 1Password account; the claude-code-docker-sandbox layout (`.docker/`, `docker-compose.yml` + gitignored override, bind-mounted repo sharing `.git` with the host); the container image already has git + gh. Repo on GitHub owned by you (personal account, or an org you are a member of) — fine-grained PATs can't be used by outside collaborators.
 metadata:
   author: okayus
-  version: "0.2.6"
+  version: "0.3.0"
 ---
 
 # Sandboxed-agent GitHub token via 1Password (repo-scoped PAT, injected per shell)
@@ -67,7 +67,7 @@ Token shape: resource owner = you; Repository access = **Only select repositorie
 - [ ] The token is **not** in the compose config: `docker inspect -f '{{range .Config.Env}}{{println .}}{{end}}' <container> | grep -c '^GH_TOKEN'` is `0`, and a second `./up.sh` on a running container reports `Running` (same container id), never `Recreated`
 - [ ] Fail closed: a shell opened *without* the wrapper (`docker exec -it <container> zsh`) has no token — `git push` gets `401`, `gh` says it is not logged in
 - [ ] The container's startup command sets an **inline, env-reading** git credential helper and a distinguishable git identity — no token on disk
-- [ ] `.claude/settings.json` no longer denies `Bash(git push:*)` (a broad deny beats every allow); it allows `git push origin claude/*` + `gh pr create/view/checks` and denies force pushes, pushes to `main`, remote branch deletion (**both** the `--delete` flag and the `git push origin :branch` refspec form — the flag alone leaves a hole), `gh pr merge`, `gh auth`, `gh api` (in the container's `bypassPermissions` default only the denies bite; the allows serve host / non-bypass sessions)
+- [ ] `.claude/settings.json` no longer denies `Bash(git push:*)` (a broad deny beats every allow); it allows `git push origin claude/*` + `gh pr create/view/checks` and denies force pushes, pushes to `main`, remote branch deletion (the `--delete` flag as a deny rule; the `git push origin :branch` refspec form with a PreToolUse hook, because a deny pattern ending in `:*` is read as the legacy prefix syntax and never matches it), `gh pr merge`, `gh auth`, `gh api` (in the container's `bypassPermissions` default only the denies bite; the allows serve host / non-bypass sessions)
 - [ ] Ruleset on `main`: PR + required check + `non_fast_forward` + `bypass_actors: []` (the `cloudflare-workers-builds-keyless-deploy` ruleset); optional second ruleset `~ALL` branches: `non_fast_forward`
 - [ ] `CLAUDE.md` states the convention: work on `claude/<topic>`, push + `gh pr create`, never merge (or the opt-in rule below)
 - [ ] E2E: in-container commit → `git push origin claude/e2e` → `gh pr create --fill` → `gh pr checks` shows CI; `gh pr merge` is refused by the deny rule; a push to `main` is refused by GitHub

@@ -5,7 +5,7 @@ license: MIT
 compatibility: Designed for Claude Code and similar agents. Targets a Linux host with systemd user units, Node 22.13+ (for `node:sqlite`; verified on 24.19), and projects that already have `wrangler` in `node_modules` and a host-side `wrangler login`. No Cloudflare API token, no GitHub secret, no new dependency.
 metadata:
   author: okayus
-  version: "0.1.1"
+  version: "0.2.0"
 ---
 
 # Cloudflare D1 backup from the host, keyless
@@ -64,7 +64,7 @@ The installed copies are plain copies on purpose (a timer must not depend on whi
 }
 ```
 
-`cwd` is the directory that holds both `wrangler.jsonc` and `node_modules/.bin/wrangler`. `repo` is only used by `d1-bookmark.mjs` to comment on a PR. `keep` is the number of dumps kept per database (26 weekly dumps = half a year).
+`cwd` is the directory that holds both `wrangler.jsonc` and `node_modules/.bin/wrangler`. `repo` is only used by `d1-bookmark.mjs` to comment on a PR. `keep` is the number of dumps kept per database (26 weekly dumps = half a year). One database per `app` entry: the dump directory, the shrink comparison and `d1-bookmark.mjs` are all keyed by app, so a second database of the same project needs its own app name (the script refuses a duplicate).
 
 ## What one run does
 

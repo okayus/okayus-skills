@@ -5,7 +5,7 @@ license: MIT
 compatibility: Designed for Claude Code and similar agents. Targets Cloudflare Workers with Hono + Vite + @cloudflare/vite-plugin + Drizzle + D1 + a private R2 bucket (wrangler@^4, globals via `wrangler types`). Assumes a session middleware that sets `memberSpaceIds` (see cloudflare-workers-space-membership-invite) on top of cloudflare-workers-deploy-skeleton. Runs credential-free in a Docker sandbox because R2 is simulated locally; the optional Images binding is low-fidelity offline.
 metadata:
   author: okayus
-  version: "0.2.0"
+  version: "0.3.0"
 ---
 
 # Private R2 image upload, served through the Worker
@@ -138,7 +138,7 @@ Stay inside the "3 specs" philosophy of `cloudflare-workers-e2e-playwright`: ext
 
 ## Backup — decide and write it down
 
-R2 has **no point-in-time recovery**; bucket locks only *prevent* deletion/overwrite for a retention period and would break the app's own delete feature if applied to the live bucket. Options (table with costs in [references/decision-matrix.md](references/decision-matrix.md)): accept the risk (the phones keep the originals — the app stores downscaled copies, so for a meal log this is the honest default), `rclone sync` to a second bucket from a GitHub Actions cron using an R2 **S3 API token** (a separate token type, created under R2 → Manage R2 API Tokens — not the Workers R2 Storage permission), or sync to another provider if the archive is irreplaceable. D1 backups stay with `cloudflare-d1-weekly-backup-via-pr`. Record the choice in an ADR; "we'll think about it later" is how family photos vanish.
+R2 has **no point-in-time recovery**; bucket locks only *prevent* deletion/overwrite for a retention period and would break the app's own delete feature if applied to the live bucket. Options (table with costs in [references/decision-matrix.md](references/decision-matrix.md)): accept the risk (the phones keep the originals — the app stores downscaled copies, so for a meal log this is the honest default), `rclone copy` (additive — `sync` would mirror an accidental delete on its next run) to a second bucket with a bucket lock or lifecycle rule, from a GitHub Actions cron using an R2 **S3 API token** (a separate token type created under R2's API tokens — not the Workers R2 Storage permission), or a copy to another provider if the archive is irreplaceable. D1 backups stay with `cloudflare-d1-weekly-backup-via-pr`. Record the choice in an ADR; "we'll think about it later" is how family photos vanish.
 
 ## The pitfalls that eat hours
 
