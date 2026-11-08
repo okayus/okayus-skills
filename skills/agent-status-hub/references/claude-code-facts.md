@@ -1,4 +1,4 @@
-# Claude Code facts the design rests on (verified 2026-08-23)
+# Claude Code facts the design rests on (verified 2026-08-23; compaction and Stop re-checked 2026-11-08)
 
 Sources: https://code.claude.com/docs/en/memory.md · hooks.md · skills.md · sessions.md · best-practices.md
 
@@ -10,7 +10,7 @@ Sources: https://code.claude.com/docs/en/memory.md · hooks.md · skills.md · s
 - Block-level HTML comments are stripped before injection (free maintainer notes).
 - Project-root CLAUDE.md survives `/compact`: it is re-read from disk and re-injected. Conversation-only instructions do not survive.
 - `/doctor` proposes trims for content derivable from the codebase; `/context` lists what loaded.
-- Recommended compaction steering: a CLAUDE.md line such as "When compacting, always preserve the full list of modified files and any test commands".
+- Compaction runs on its own near the top of the context window (1M tokens on most current models). Best practices list "The context window is your main constraint, manage it aggressively" under "What you can stop doing" and no longer suggest a compaction-steering line in CLAUDE.md.
 
 ## Auto memory
 
@@ -23,7 +23,7 @@ Sources: https://code.claude.com/docs/en/memory.md · hooks.md · skills.md · s
 
 - Event list includes `SessionStart`, `UserPromptSubmit`, `PreCompact`, `PostCompact`, `Stop`, `SessionEnd`, `InstructionsLoaded`, `FileChanged`.
 - **`SessionStart`**: matchers `startup`, `resume`, `clear`, `compact`, `fork`; omit the matcher to fire on all. "Claude Code adds plain-text stdout as context that Claude can see and act on." Input JSON carries `session_id`, `transcript_path`, `cwd`, `model`.
-- **`PreCompact`** (`manual` / `auto`): stdout discarded; exit 2 blocks compaction. **`Stop`**: stdout discarded; exit 2 prevents stopping (overridden after 8 consecutive blocks). **`SessionEnd`**: cannot block, stdout discarded.
+- **`PreCompact`** (`manual` / `auto`): stdout discarded; exit 2 blocks compaction. **`Stop`**: plain stdout discarded; exit 2 prevents stopping (overridden after 8 consecutive blocks); since 2.1.163 a Stop / SubagentStop hook can return `hookSpecificOutput.additionalContext` to hand Claude feedback and keep the turn going. **`SessionEnd`**: cannot block, stdout discarded.
 - Hook shape: `{"hooks": {"SessionStart": [{"matcher": "...", "hooks": [{"type": "command", "command": "${CLAUDE_PROJECT_DIR}/.claude/hooks/x.sh", "timeout": 10}]}]}}`. Types: `command`, `http`, `mcp_tool`, `prompt`, `agent`.
 - Hooks are deterministic ("run regardless of what Claude decides"); CLAUDE.md is not.
 
