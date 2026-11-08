@@ -45,9 +45,13 @@ const readConfig = (path) => {
   return {
     outDir: expandHome(raw.outDir ?? "~/backups/d1"),
     keep: Number.isInteger(raw.keep) && raw.keep > 0 ? raw.keep : 26,
-    databases: raw.databases.map((d) => {
+    databases: raw.databases.map((d, i, all) => {
       if (!d.app || !d.cwd || !d.database) {
         throw new Error(`${path}: every entry needs "app", "cwd" and "database"`);
+      }
+      // One database per app: the dump dir, the shrink comparison and d1-bookmark.mjs are all keyed by app.
+      if (all.findIndex((e) => e.app === d.app) !== i) {
+        throw new Error(`${path}: app "${d.app}" appears twice — give each database its own app name`);
       }
       return { app: d.app, cwd: expandHome(d.cwd), database: d.database, repo: d.repo ?? null };
     }),
@@ -131,12 +135,13 @@ const shrunkTables = (previous, current) =>
     .filter(([name, before]) => before >= SHRINK_MIN_ROWS && (current[name] ?? 0) < before / 2)
     .map(([name, before]) => `${name}: ${before} -> ${current[name] ?? 0}`);
 
-const dumpsOf = (dir, database) =>
-  existsSync(dir)
-    ? readdirSync(dir)
-        .filter((f) => f.startsWith(`${database}-`) && f.endsWith(".sql.gz"))
-        .sort()
-    : [];
+const escapeRegExp = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+
+// Exactly `<database>-YYYYMMDD-HHMMSS.sql.gz`: a prefix match would also count `<database>-preview-…`.
+const dumpsOf = (dir, database) => {
+  const name = new RegExp(`^${escapeRegExp(database)}-\\d{8}-\\d{6}\\.sql\\.gz$`);
+  return existsSync(dir) ? readdirSync(dir).filter((f) => name.test(f)).sort() : [];
+};
 
 const prune = (dir, database, keep) => {
   const old = dumpsOf(dir, database).slice(0, -keep);

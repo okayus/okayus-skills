@@ -1,18 +1,18 @@
 ---
 name: cloudflare-workers-pat-bearer-auth
-description: Add personal access tokens (PATs, Bearer header) to a Hono + D1 Cloudflare Worker so CLIs, AI agents and sibling apps can call the API as a user next to the cookie session — the receiving app mints the token in its settings UI, the caller stores it, and the receiver never needs to know who is calling. Use when building a CLI or an app-to-app push ("post today's quiz results into my diary app"), when a Bearer request gets `403 csrf_origin_mismatch`, when a PAT could mint more PATs, when revoking one token must not log the user out, or when a D1 leak must not yield live credentials. Covers the `<app>_pat_` prefix (greppable; NOT auto-detected by GitHub's free push protection), sha256(token + pepper) with the pepper as a Worker Secret, the validation order that rejects junk before D1, PAT-before-session middleware, scopes as a const tuple, session-only token management, the throttled last_used_at write, the CSRF exemption for Bearer, and pepper rotation. Also the caller-side CONTRACT recipe (v0.2.0): the receiver publishes `docs/senders.md` plus a JSON Schema generated from its zod body schema and pinned by `pnpm test`; the caller reads both from the receiver's public repo over raw GitHub from inside the sandbox firewall, vendors the schema and contract-tests its builder with `z.fromJSONSchema` — written after a hand-copied contract drifted in three days while both projects' suites stayed green. Not Cloudflare API tokens.
+description: Add personal access tokens (PATs, Bearer header) to a Hono + D1 Cloudflare Worker so CLIs, AI agents and sibling apps can act as the user next to the cookie session. The receiver mints the token, stores only a peppered hash and never needs to know the caller. Use when building a CLI or an app-to-app push (post today's quiz results into my diary app), when a Bearer request gets `403 csrf_origin_mismatch`, when a PAT must not mint more PATs, when revoking one token must not log the user out, when a push between your own Workers never arrives (a 404 whose body says error code 1042), when a receiver change starts answering the sender with 400, or when sender and receiver must share a request contract (a JSON Schema generated from the receiver's zod schema and contract-tested by the caller). Not Cloudflare API tokens.
 license: MIT
 compatibility: Designed for Claude Code and similar agents. Targets Cloudflare Workers with Hono 4 + Drizzle ORM + D1 (SQLite) on the cloudflare-workers-deploy-skeleton stack (Vite + @cloudflare/vite-plugin, pnpm), WebCrypto only (no nodejs_compat). Needs an existing cookie-session layer — third-party OAuth (mazuoboeru, `arctic`) or passkeys (cloudflare-workers-passkey-auth); the PAT path sits in front of it. Requires wrangler CLI for `wrangler secret put PAT_PEPPER`.
 metadata:
   author: okayus
-  version: "0.3.0"
+  version: "0.4.0"
 ---
 
 # Cloudflare Workers PAT (Bearer) auth for machine callers
 
 Get a Hono + D1 Worker that already has cookie sessions to the state where **a CLI, an AI agent or another app can act as a specific user with a token the user minted in the settings UI** — the token is shown once, only `sha256(token + pepper)` is stored, every existing route accepts either credential, a PAT can never mint another PAT, and revoking one token touches nothing else.
 
-Extracted from mazuoboeru (ADR-0001, `worker/auth/pat.ts`; in production since Phase 1, 2026-06; the `mzo` CLI on npm has used it since 2026-08-13), 2026-08-22. The first *receiver-side* consumer planned is kokemusu (`POST /api/posts` behind `post:write`).
+Extracted from mazuoboeru (ADR-0001, `worker/auth/pat.ts`; in production since Phase 1, 2026-06; the `mzo` CLI on npm has used it since 2026-08-13), 2026-08-22. The first *receiver-side* consumer is kokemusu (`POST /api/posts` behind `post:write`, in production since 2026-09-03, #31).
 
 **The shape in one sentence**: the **receiving** app issues the token (session-only route), the **calling** side stores it (env var, another Worker's secret) and sends `Authorization: Bearer <token>`, and the receiver's auth middleware tries the PAT **before** the cookie — so the receiver never needs to know which app is calling, only which user and which scopes.
 
@@ -29,7 +29,7 @@ Extracted from mazuoboeru (ADR-0001, `worker/auth/pat.ts`; in production since P
 
 Do **not** use for:
 - Third-party developer apps that need a consent screen, refresh tokens or per-app client ids — that is being an OAuth *provider*, a different design
-- Worker-to-Worker calls inside **one** Cloudflare account — use a service binding, no secret at all
+- Internal Worker-to-Worker calls with no user behind them — a service binding alone is enough, no token at all (a push on a user's behalf still carries that user's PAT, and between Workers on one zone it travels over a service binding — see the 1042 trap)
 - Anonymous API keys with no user behind them (metrics, public read APIs) — no `user_id`, no scopes; a different table
 - **Cloudflare API tokens** (`wrangler deploy`, CI) — unrelated despite the name; see `cloudflare-api-token-permissions`
 
@@ -40,7 +40,7 @@ Do **not** use for:
 | **PAT (Bearer)** | ✓ | ~150 LOC, one table, works from `curl`; the user copies one secret by hand (ADR-0001) |
 | OAuth Device Authorization Grant | later | nicer CLI login, but +200 LOC and a polling endpoint; can be layered on top of PATs (ADR-0001) |
 | Cloudflare Access service token | ✗ | a machine identity, not a user; authz lives in the dashboard |
-| Service binding | ✗ | only within one account — a self-hosted receiver in *another* account can't be bound |
+| Service binding | ✗ (as authz) | only within one account — a self-hosted receiver in *another* account can't be bound; inside one account it is the transport for a PAT push (1042 trap), not a replacement for the user's token |
 | HMAC-signed webhook | ✗ | the same shared secret minus the user, scopes, revocation list and UI; pick it only when the receiver has no users / sessions at all |
 
 Constraints you accept: the raw token crosses a boundary by hand (so scope it minimally and make revocation one click), and a pepper rotation invalidates **every** token.
@@ -123,7 +123,7 @@ The prefix gate matters for the bot-scan budget: a scanner spraying `Authorizati
 
 **Why sessions are `scopes: []`** meaning "not scope-limited": the session is the human; limiting it would only add a second permission model. Scopes exist to make a leaked or over-shared PAT less valuable.
 
-**Composing with a passkey session** (kokemusu): mazuoboeru's session layer exposes `getSessionUser(c)` returning the `user` row; `cloudflare-workers-passkey-auth` instead sets `userId` / `displayName` inside its own `sessionMiddleware`. Either way, factor the cookie lookup into a function the PAT path can fall back to, and have both paths set the **same** context variables — the variant is sketched in the reference (UNVERIFIED).
+**Composing with a passkey session** (kokemusu): mazuoboeru's session layer exposes `getSessionUser(c)` returning the `user` row; `cloudflare-workers-passkey-auth` instead sets `userId` / `displayName` inside its own `sessionMiddleware`. Either way, factor the cookie lookup into a function the PAT path can fall back to, and have both paths set the **same** context variables — the variant and the final shape kokemusu runs (#31) are in the reference.
 
 ## CSRF: exempt Bearer, keep the Origin check for cookies
 
@@ -151,31 +151,46 @@ The UI is a name field, a **show-once card** (`<code>` + "shown only now"), and 
 | Caller | Keep the token in | Notes |
 |---|---|---|
 | CLI | env var `<APP>_PAT` (+ `<APP>_BASE_URL` to aim at dev) | never argv (visible in `ps`), never a committed file; `whoami` is the smoke test (mazuoboeru `mzo`) |
-| Another Worker, **your** account only | `wrangler secret put <RECEIVER>_PAT` + the URL as a `vars` entry | the personal-use shape of "quiz app → diary app": a Cron builds the day's post and `fetch`es with Bearer. **Needs `"compatibility_flags": ["global_fetch_strictly_public"]` on the SENDER when both Workers share a zone (e.g. the same `<account>.workers.dev`) — see the trap below** |
+| Another Worker, **your** account only | `wrangler secret put <RECEIVER>_PAT` + the URL as a `vars` entry | the personal-use shape of "quiz app → diary app": a Cron builds the day's post and sends it with Bearer. When both Workers share a zone (e.g. the same `<account>.workers.dev`), send it over a Service Binding — a global `fetch()` gets error 1042, see the trap below |
 | Another app, **per user** | its own DB, **encrypted** (AES-GCM under a Worker Secret), not hashed — it has to send it | plus a delivery ledger for idempotency; a separate skill (`cloudflare-workers-outbound-integration`, planned) |
 | AI agent in a sandbox | the sandbox's env | the token crosses the isolation boundary on purpose — grant the narrowest scope and revoke when the job is done |
 
 ### Trap: a Worker cannot `fetch` a sibling Worker on the same zone — it gets a 404 that never reached the receiver (error 1042)
 
-Two Workers on the same zone — which includes every Worker of one account on `<account>.workers.dev` — cannot call each other with the global `fetch()` unless the **sender** has the `global_fetch_strictly_public` compatibility flag. Without it Cloudflare does not route the request to the other Worker at all; it answers `404` with the body `error code: 1042` ("Worker tried to fetch from another Worker on the same zone, which is only supported when the `global_fetch_strictly_public` compatibility flag is used"). The flag is not switched on by any compatibility date.
+Two Workers on the same zone — which includes every Worker of one account on `<account>.workers.dev` — cannot reach each other with the global `fetch()`. Cloudflare does not route the request to the other Worker at all; it answers `404` with the body `error code: 1042` ("Worker tried to fetch from another Worker on the same zone, which is only supported when the `global_fetch_strictly_public` compatibility flag is used"). Cloudflare's errors page lists a second cause for the same code: a workers.dev URL that no Worker serves (e.g. the receiver's workers.dev route is disabled), so check that first. The docs say the flag allows the call; in the case below it did not make the push arrive, whether or not the flag itself was at fault, and a Service Binding did.
 
-Measured (mazuoboeru → kokemusu, 2026-09-05 → 2026-09-21): a nightly Cron push "went live", and not one request ever arrived — for 16 days. What it looked like from each side, and why nobody noticed:
+Measured (mazuoboeru → kokemusu): the nightly Cron push "went live" on 2026-09-05, and nothing arrived until 2026-10-01 — 26 days, the first 16 of them before anyone noticed (2026-09-21). What it looked like from each side, and why nobody noticed:
 
 - The smoke test on the day the PAT was minted was a `curl` from a laptop. That travels the public Internet, so it worked and "the wiring is done" went into the status doc. **A `curl` that works proves nothing about a Worker-to-Worker `fetch`: the route is different.**
 - The sender's boundary logged only the status. `POST /api/posts -> 404` reads like an application 404. Log the first ~160 characters of the **response** body on any non-2xx (never the token, never the request body): `error code: 1042` names itself.
 - Unit tests and contract tests replace `fetch`, so platform routing is invisible to them by construction. Only a production measurement sees it.
 - The receiver's token row told the truth the whole time: `last_used_at` still showed the minting day. Two hand-written posts carrying the sender's provenance tag were later mistaken for proof that the Cron worked — their `created_at` was 17:30 and 23:56, not 00:15.
 
-So, for an app-to-app push between your own Workers:
+What made it arrive, in order:
+
+1. 2026-09-21 — `global_fetch_strictly_public` on the sender (mazuoboeru #105). Still nothing arrived for a week, and the receiver's `last_used_at` did not move. A `wrangler dev --remote` probe got 1042 with or without the flag. Whether the flag works for deployed Workers on workers.dev stayed unconfirmed, because the fault in step 3 would have hidden it.
+2. 2026-09-30 — a Service Binding (mazuoboeru #106). The first tick logged `POST /api/posts -> 401 {"error":{"type":"unauthorized"}}`: kokemusu's own JSON, so the request had reached the receiver.
+3. 2026-10-01 — the PAT was re-minted on the receiver and put into the sender again with `wrangler secret put`. Pushes have arrived since (the receiver's `last_used_at` read 2026-11-07 00:15 JST in its D1 dump of 2026-11-08).
+
+So, for an app-to-app push between your own Workers on one zone, keep the HTTP contract and change only the transport:
 
 ```jsonc
 // sender's wrangler.jsonc
-"compatibility_flags": ["global_fetch_strictly_public"],
+"services": [{ "binding": "RECEIVER", "service": "<receiver-worker-name>" }],
 ```
 
-and make this the definition of done, not an optional follow-up: after the first scheduled run in production, (a) the sender's log says `-> 201`, (b) the receiver's `api_token.last_used_at` moved, (c) the row exists **with a `created_at` inside the Cron's minute**. `wrangler tail` on both Workers across the tick shows (a) and whether the request arrived at all.
+```ts
+// sender: same URL, method, Bearer header and body as a public call; only the transport is the binding
+const res = await env.RECEIVER.fetch(new Request(`${env.RECEIVER_URL}/api/posts`, {
+  method: "POST",
+  headers: { authorization: `Bearer ${env.RECEIVER_PAT}`, "content-type": "application/json" },
+  body: JSON.stringify(post),
+}));
+```
 
-A Service Binding also avoids 1042, but it ties the sender to the receiver's deployment and stops the receiver being "anyone with a PAT, from anywhere"; keep the HTTP contract and set the flag.
+The binding ties the sender's deploy to a Worker of that name in the same account, and the receiver sees no `CF-Connecting-IP`, so an IP-keyed rate limit puts every bound request under one key. The receiver's side is unchanged: it still accepts anyone with a valid PAT, from anywhere.
+
+Make this the definition of done, not an optional follow-up: after the first scheduled run in production, (a) the sender's log says `-> 201`, (b) the receiver's `api_token.last_used_at` moved, (c) the row exists **with a `created_at` inside the Cron's minute**. A `401` does not count: a rejected token does not move `last_used_at`. `wrangler tail` on both Workers across the tick shows (a) and whether the request arrived at all.
 
 Receiver-side contract for app-to-app pushes: one route (`POST /api/posts`), one write scope (`post:write`), a body with no sender-specific fields, and — if the caller retries on failure — an `Idempotency-Key` header the receiver remembers for 24 h (design note; not in the source project).
 
@@ -211,7 +226,7 @@ What both sides CAN do, without any firewall change: read the receiver's **publi
 
 1. Point your CLAUDE.md / ADR at the receiver's `docs/senders.md` raw URL and say "read it, never copy the limits".
 2. Vendor the schema next to the builder (`worker/domain/<receiver>-posts.schema.json`) with a refresh script: `"<receiver>:schema": "curl -fsSL <raw schema url> -o worker/domain/<receiver>-posts.schema.json && <your formatter>"` — run it inside the sandbox.
-3. Contract-test the pure builder against it, no extra dependency (zod ≥ 4.1 has `z.fromJSONSchema`; `format: "date"`, `pattern`, `additionalProperties: false` all honoured — checked on 4.4.3 and 4.5.2):
+3. Contract-test the pure builder against it, no extra dependency (`z.fromJSONSchema` arrived in zod 4.2 and is marked experimental, outside zod's stable API — pin zod and re-run the retired-key test when you bump it; `format: "date"`, `pattern`, `additionalProperties: false` all honoured — checked on 4.4.3 and 4.5.2):
 
    ```ts
    import schema from "./kokemusu-posts.schema.json";
@@ -259,7 +274,6 @@ State of the source project: the CLI's request builders are pure and table-teste
 
 ## Unverified claims — confirm while implementing, then write back
 
-- UNVERIFIED: the passkey-session composition (`authenticate` falling back to `cloudflare-workers-passkey-auth`'s cookie lookup, both paths setting `userId` / `displayName`) has not run — kokemusu is the first; record the final `Variables` shape in the middleware reference.
 - UNVERIFIED: per-IP rate limiting of PAT-reachable mutation routes via the bot-scan binding — not wired in mazuoboeru; confirm it does not throttle a legitimately busy agent behind one IP (limit ≥ the agent's burst).
 - UNVERIFIED: the API-level PAT e2e spec (mint → call → `session_required` → revoke → 401) — sketched, not run.
 - UNVERIFIED: Hono RPC (`hc<AppType>`) inference across a router that starts with `.use("*", requireSession)` — works in mazuoboeru on Hono `^4.6`; re-check after a Hono major bump.

@@ -1,11 +1,11 @@
 ---
 name: cloudflare-d1-keyless-host-backup
-description: Back up every Cloudflare D1 database you own from ONE host-side systemd timer, with no Cloudflare credential stored in GitHub, in a repo, or in a sandbox — it reuses the host's existing `wrangler login`. Use when the repo is public or keyless (so `cloudflare-d1-weekly-backup-via-pr` does not fit), when "we will add backups later" has been said more than once, or before merging any D1 migration. Ships the backup script (export → restore rehearsal in an in-memory SQLite → row counts → gzip outside every repo → rotation → desktop alert on failure or on a table that lost half its rows), a restore tool, and a Time Travel bookmark helper for migration PRs. Covers the trap that a raw `wrangler d1 export` dump can NOT be imported back into D1 (tables are not ordered parent-first and D1 always enforces foreign keys — measured), that a running export blocks the database, that FTS5/virtual tables break export, the minimal PATH of systemd user units, and why `pnpm exec wrangler` on the host wrecks a container's node_modules.
+description: Back up every Cloudflare D1 database you own from one host-side systemd timer that reuses the host's `wrangler login`, with no Cloudflare credential in GitHub, a repo or a sandbox. Use when the repo is public or keyless (so cloudflare-d1-weekly-backup-via-pr does not fit), when backups keep being postponed, before merging a D1 migration (Time Travel bookmark helper), or when restoring from a dump, since a raw `wrangler d1 export` dump cannot be imported back into D1 as is. Ships the backup script (export, restore rehearsal in an in-memory SQLite, row counts, rotation, alerts), a restore tool and the bookmark helper. Covers export blocking the database, FTS5 and virtual tables breaking export, the minimal PATH of systemd user units, and why `pnpm exec wrangler` on the host wrecks a container's node_modules.
 license: MIT
 compatibility: Designed for Claude Code and similar agents. Targets a Linux host with systemd user units, Node 22.13+ (for `node:sqlite`; verified on 24.19), and projects that already have `wrangler` in `node_modules` and a host-side `wrangler login`. No Cloudflare API token, no GitHub secret, no new dependency.
 metadata:
   author: okayus
-  version: "0.1.0"
+  version: "0.2.0"
 ---
 
 # Cloudflare D1 backup from the host, keyless
@@ -64,7 +64,7 @@ The installed copies are plain copies on purpose (a timer must not depend on whi
 }
 ```
 
-`cwd` is the directory that holds both `wrangler.jsonc` and `node_modules/.bin/wrangler`. `repo` is only used by `d1-bookmark.mjs` to comment on a PR. `keep` is the number of dumps kept per database (26 weekly dumps = half a year).
+`cwd` is the directory that holds both `wrangler.jsonc` and `node_modules/.bin/wrangler`. `repo` is only used by `d1-bookmark.mjs` to comment on a PR. `keep` is the number of dumps kept per database (26 weekly dumps = half a year). One database per `app` entry: the dump directory, the shrink comparison and `d1-bookmark.mjs` are all keyed by app, so a second database of the same project needs its own app name (the script refuses a duplicate).
 
 ## What one run does
 

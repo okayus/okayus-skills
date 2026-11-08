@@ -49,7 +49,7 @@ together if you need English headings.
 ```bash
 #!/usr/bin/env bash
 # SessionStart hook: セッション開始・再開・/clear・compact 後に「いま」を注入する。
-# SessionStart の stdout はそのまま Claude のコンテキストに入る（PreCompact / Stop の stdout は捨てられる）。
+# SessionStart の stdout はそのまま Claude のコンテキストに入る（Stop の stdout は捨てられ、PreCompact の stdout は圧縮の要約への指示になる）。
 # ホスト（CLAUDE_PROJECT_DIR=リポ）でもコンテナ（/workspace）でも同じに動く。失敗してもセッションは止めない。
 set -u
 root="${CLAUDE_PROJECT_DIR:-$(git rev-parse --show-toplevel 2>/dev/null || pwd)}"
@@ -105,14 +105,14 @@ exit "$fail"
   "SessionStart": [
     {
       "hooks": [
-        { "type": "command", "command": "${CLAUDE_PROJECT_DIR}/.claude/hooks/session-start.sh", "timeout": 10 }
+        { "type": "command", "command": "${CLAUDE_PROJECT_DIR}/.claude/hooks/session-start.sh", "args": [], "timeout": 10 }
       ]
     }
   ]
 }
 ```
 
-No `matcher` → fires on `startup`, `resume`, `clear` and `compact`. Put it in `.claude/settings.json`, not
+`"args": []` selects exec form, so the path placeholder needs no quoting. No `matcher` → fires on every source (`startup`, `resume`, `clear`, `compact`, `fork`). Put it in `.claude/settings.json`, not
 `settings.local.json`: the container sees only what is in the repo.
 
 ## `.github/workflows/ci.yml` — first step after checkout
@@ -160,5 +160,4 @@ argument-hint: "[一言メモ（任意）]"
 
 - `docs/status.md` = いまのハブ。**40 行 / 3 KB 上限**、見出しは「フェーズ / 次の 3 手 / 詰まり・人手待ち / 進行中 PR」の 4 つ固定。終わった項目は消して `docs/log.md` の先頭へ 1 行（取り消し線は禁止）。8 行を超える節は `docs/plans/<topic>.md` に切り出し、完了したら削除。
 - セッションの区切りでユーザが `/handoff` を打つ（書き換え → log → `.claude/hooks/check-status.sh` → commit）。CI も同じ検査を走らせる。
-- `/compact` するときは、変更したファイル一覧と「次の 3 手」の 1 手目を必ず要約に残す。
 ```

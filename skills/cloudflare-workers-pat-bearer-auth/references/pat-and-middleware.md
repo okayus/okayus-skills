@@ -288,7 +288,7 @@ export type Env = { Bindings: Bindings; Variables: Variables };
 
 Add to your closed `API_ERROR_CODES` tuple: `"unauthorized"`, `"session_required"`, `"insufficient_scope"`, `"csrf_origin_mismatch"`, `"invalid_body"`, `"not_found"`. Bodies are `{ error: code }` plus optional detail (`insufficient_scope` adds `{ scope }`).
 
-## Variant: composing with a passkey session (UNVERIFIED — kokemusu is the first)
+## Variant: composing with a passkey session (verified in kokemusu #31, 2026-09-03)
 
 `cloudflare-workers-passkey-auth` doesn't expose a `getSessionUser`; its `sessionMiddleware()` does the JWT → `sessions` row → `c.set("userId") / c.set("displayName")` dance inline and rejects on failure. To put a PAT in front of it without duplicating the cookie logic:
 
@@ -299,4 +299,4 @@ Add to your closed `API_ERROR_CODES` tuple: `"unauthorized"`, `"session_required
 5. `/api/auth/credentials/*` (add / delete a device) goes behind `requireSession`, like `/api/tokens/*` — credentials are managed by humans with a cookie, not by tokens.
 6. Port the Bearer exemption into the passkey skill's `csrfOriginCheck` (the `isBearer` skip shown in `routes-and-client.md`), keeping that skill's `{ error: { type: "csrf_origin_mismatch" } }` body shape. Without it every PAT mutation is this skill's symptom #1 — `403 csrf_origin_mismatch`.
 
-Write the final `Variables` shape back here once it runs.
+The shape kokemusu runs (`worker/middleware/auth.ts`, `worker/types.ts`): `resolveAuth` tries the PAT first, then the cookie session; both paths set `userId`, `displayName`, `authMethod` (`"pat"` / `"session"`) and `scopes` (`[]` for sessions, meaning not scope-limited). `Variables` is `{ userId: string; displayName: string; authMethod?: AuthMethod; scopes?: Scope[] }` — the last two are undefined only on public routes. An expired session answers `session_expired`, anything else `unauthorized`, in the passkey skill's `{ error: { type } }` body: a rejected PAT gets `401 {"error":{"type":"unauthorized"}}`.
