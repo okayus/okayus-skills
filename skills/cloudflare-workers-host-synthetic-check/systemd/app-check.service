@@ -3,5 +3,12 @@ Description=Daily synthetic check of deployed apps (health + WebAuthn rpId), see
 
 [Service]
 Type=oneshot
+# Pipelines call the projects' wrangler, whose .bin shim execs `node`: a systemd user
+# unit has a minimal PATH, so name the directory of the node you want. The Install step in
+# SKILL.md rewrites both mise paths below to the node you actually use.
+Environment=PATH=%h/.local/share/mise/installs/node/lts/bin:/usr/local/bin:/usr/bin:/bin
+# Optional APP_CHECK_DISCORD_WEBHOOK=… lives here (chmod 600): a webhook URL is a credential.
+EnvironmentFile=-%h/.config/app-check/env
 ExecStart=%h/.local/share/mise/installs/node/lts/bin/node %h/.config/app-check/app-check.mjs
-TimeoutStartSec=5min
+# Two D1 counts of up to 120 s each, plus one 5 s retry per side (see Traps 6 in SKILL.md).
+TimeoutStartSec=10min

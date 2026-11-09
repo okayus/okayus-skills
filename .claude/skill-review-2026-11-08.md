@@ -45,7 +45,7 @@ high 計 10（反映 9、保留 1）/ med 計 34 / low 計 53。
 
 ## 次の PR に回すもの（優先度順）
 
-- **P1**: host-synthetic-check の high（unit の node が mise に固定）と med 2 件（Discord webhook を unit の `Environment=` に書かせている、Install の置き場所の決め打ち）。PR #47（pipelines）を merge してから、その上で直す。
+- **P1（#47 で反映済み）**: host-synthetic-check の high（unit の node が mise に固定 → Install で `node -p process.execPath` に書き換え）と med 2 件（Discord webhook は 0600 の `EnvironmentFile=` へ、Install の置き場所は「この SKILL.md のディレクトリ」）、low 4 件（`install -d`、Node 22+、相互参照 2 件、rpId を返さない app）。残りは OnFailure= の通知と WebAuthn の Related Origin Requests。
 - **P2 事実の陳腐化（med）**: space-invite の drizzle-kit journal 手順（v1 で不要）と object 形式の extra config、passkey-auth の @simplewebauthn v14、r2 の decision-matrix の古い制限値と subrequest 上限、d1-keyless-host-backup の Trap 6（suspend とログアウトの混同）、token-via-1password の 1Password のレート上限（日次上限）、playwright-e2e-in-docker-sandbox の canonical な Dockerfile block（本番は variant 側）。
 - **P3 構造（med）**: 検証ログを references へ（passkey / space-invite / r2 / token / pat）、UNVERIFIED ラベルの整理、pat-bearer-auth と token-via-1password の分割、playwright の bake 文書の重複解消。
 - **P4 磨き込み（low）**: 強調を外す、description の経緯を本文へ、相互参照の追加、compatibility の整理、残りの low。
