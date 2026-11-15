@@ -1,11 +1,11 @@
 ---
 name: cloudflare-workers-host-synthetic-check
-description: Catch "the app answers 200 but nobody can log in" within a day with a credential-free daily check from the developer's machine (a systemd user timer). It asserts `/health`, that the WebAuthn `rpId` from each app's login-begin endpoint still matches the host it is served from, and that a Cron-driven push between your apps arrived (pipelines, two read-only D1 counts through the host's `wrangler login`). Use after any account-, domain- or subdomain-level change, when several small passkey apps share one Cloudflare account, when a nightly app-to-app push may be failing silently, or when the only monitoring is "someone will tell me".
+description: Catch "the app answers 200 but nobody can log in" within a day with a credential-free daily check from the developer's machine (a systemd user timer). It asserts `/health`, that the WebAuthn `rpId` from each app's login-begin endpoint still matches the host it is served from, that a Cron-driven push between your apps arrived (pipelines, two read-only D1 counts through the host's `wrangler login`), and that the host's weekly D1 backup ran and succeeded within 8 days (backups, one local file). Use after any account-, domain- or subdomain-level change, when several small passkey apps share one Cloudflare account, when a nightly app-to-app push or a weekly backup may be failing silently, or when the only monitoring is "someone will tell me".
 license: MIT
 compatibility: Designed for Claude Code and similar agents. Targets a Linux host with systemd user units and Node 22+ (global `fetch`, `AbortSignal.timeout`); the unit template names a mise-installed node and the Install step rewrites it. The app checks call only public endpoints. Pipelines additionally need each project's `node_modules/.bin/wrangler` and a host-side `wrangler login` (read-only `d1 execute --remote`); nothing is stored.
 metadata:
   author: okayus
-  version: "0.2.0"
+  version: "0.3.0"
 ---
 
 # Daily synthetic check from the host
@@ -24,6 +24,7 @@ Measured cost (2026-06-12 → 2026-09): renaming the account's workers.dev subdo
 - [ ] `node ~/.config/app-check/app-check.mjs` prints `ok` for every app
 - [ ] The failure path has been seen once (point an entry at a local fake that returns another `rpId`)
 - [ ] Every Cron-driven push between your apps has a `pipelines` entry, tried once with `--date=` on a day known to have failed and once on a quiet day
+- [ ] If the host runs `cloudflare-d1-keyless-host-backup`: `apps.json` has `backups`, and its failure path was seen once (point `lastRun` at a copy whose `at` is 10 days old)
 - [ ] `app-check.timer` enabled and one run under systemd is green (pipelines need the unit's `Environment=PATH=…`, see the unit file)
 
 ## Install
@@ -86,6 +87,17 @@ A Cron Trigger that POSTs to a sibling app is invisible from outside: the sender
 - No activity → `ok … no activity on the sender`. Activity and nothing arrived → `FAIL` + notification. `node app-check.mjs --date=2026-09-15` judges a past day (use it once on a day you know failed, and once on a quiet day).
 - Pipelines run only on a full run (`app-check.mjs` with no app names).
 - Cost: two `wrangler d1 execute --remote` SELECTs a day. They are ordinary queries, not exports, so they do not block the database.
+
+## Backups: is the weekly export fresh?
+
+`cloudflare-d1-keyless-host-backup` notifies once, when a run fails at 04:40 on a Sunday — the sleeping-machine notification of Trap 4. Measured on kokemusu: its export failed with `Authentication error [code: 10000]` on 2026-10-04, 10-11 and 10-18, and four weeks passed without a new dump before anyone noticed. Judged here every morning, the notice repeats until a run succeeds:
+
+```json
+{ "backups": { "lastRun": "~/backups/d1/last-run.json", "maxAgeDays": 8 }, "apps": [ … ] }
+```
+
+- `FAIL` when `last-run.json` is missing or unreadable, when its `at` is older than `maxAgeDays`, or when any app's last result is `ok: false`. The timer is weekly; 8 days leaves one for a machine that was off on Sunday (`Persistent=true` runs it at the next login).
+- Full runs only, like pipelines. No Cloudflare call: it reads one local file.
 
 ## Traps
 

@@ -5,7 +5,7 @@ license: MIT
 compatibility: Designed for Claude Code and similar agents. Targets a Linux host with systemd user units, Node 22.13+ (for `node:sqlite`; verified on 24.19), and projects that already have `wrangler` in `node_modules` and a host-side `wrangler login`. No Cloudflare API token, no GitHub secret, no new dependency.
 metadata:
   author: okayus
-  version: "0.2.0"
+  version: "0.2.1"
 ---
 
 # Cloudflare D1 backup from the host, keyless
@@ -73,6 +73,8 @@ The installed copies are plain copies on purpose (a timer must not depend on whi
 3. Writes `<outDir>/<app>/<database>-<UTC stamp>.sql.gz` (`0600`), reads it back, prunes to `keep`
 4. Compares row counts with the previous run. A table that had 20+ rows and lost more than half is reported. This is what turns a silent mass delete (an unintended `ON DELETE CASCADE` during a table rebuild, say) into something you hear about while Time Travel can still undo it
 5. Writes `<outDir>/last-run.json`; on failure or warning sends a desktop notification (`notify-send`) and, if `D1_BACKUP_DISCORD_WEBHOOK` is set in the unit, a Discord message. Exit code 1 on failure, so `systemctl --user status d1-backup` shows `failed`
+
+That notification fires once, at 04:40 on a Sunday, on a machine nobody is watching. On kokemusu the export failed three Sundays running (2026-10-04 to 10-18) and nobody saw it. Have the daily `cloudflare-workers-host-synthetic-check` (≥ 0.3.0) judge `last-run.json` with its `backups` entry, so the notice repeats every morning until a run succeeds.
 
 ## Before merging a migration PR
 
