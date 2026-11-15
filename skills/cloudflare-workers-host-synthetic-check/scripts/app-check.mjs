@@ -22,6 +22,12 @@
 // This exists because such a push failed every night for 16 days (the sender got a 404
 // that never reached the receiver, Cloudflare error 1042) while both apps, their tests
 // and their health checks were green.
+//
+// Backups (optional): the last-run.json of the host's weekly D1 export
+// (cloudflare-d1-keyless-host-backup) must be younger than `maxAgeDays` and hold no
+// failed app. The export notifies once, when it fails at 04:40 on a Sunday; in October
+// 2026 one app's export failed three Sundays running and nobody saw it. Judged here
+// every morning, the notice repeats until a run succeeds.
 import { spawnSync } from "node:child_process";
 import { existsSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
@@ -54,7 +60,13 @@ const readConfig = (path) => {
     sender: side(`pipeline "${p.name}" sender`, p.sender, "activitySql"),
     receiver: side(`pipeline "${p.name}" receiver`, p.receiver, "arrivedSql"),
   }));
-  return { apps, pipelines };
+  const backups = raw.backups
+    ? {
+        lastRun: expandHome(raw.backups.lastRun ?? "~/backups/d1/last-run.json"),
+        maxAgeDays: Number.isFinite(raw.backups.maxAgeDays) ? raw.backups.maxAgeDays : 8,
+      }
+    : null;
+  return { apps, pipelines, backups };
 };
 
 // rpId may sit anywhere in the body ({ rpId } or { options: { rpId } }).
@@ -189,6 +201,26 @@ const checkPipeline = (pipeline, date, nowMs) => {
   }
 };
 
+const checkBackups = ({ lastRun, maxAgeDays }, nowMs) => {
+  if (!existsSync(lastRun)) return [`${lastRun} not found: no backup has run`];
+  let run;
+  try {
+    run = JSON.parse(readFileSync(lastRun, "utf8"));
+  } catch (e) {
+    return [`${lastRun} is unreadable: ${e.message}`];
+  }
+  const problems = [];
+  const ageDays = (nowMs - Date.parse(run.at)) / 86_400_000;
+  // NaN (no or bad `at`) fails too.
+  if (!(ageDays <= maxAgeDays)) {
+    problems.push(`the last backup run is ${Number.isFinite(ageDays) ? ageDays.toFixed(1) : "?"} days old (limit ${maxAgeDays})`);
+  }
+  for (const r of run.results ?? []) {
+    if (!r.ok) problems.push(`${r.app}: the last export failed (${String(r.error ?? "").split("\n")[0]}); journalctl --user -u d1-backup`);
+  }
+  return problems;
+};
+
 const notify = (title, body) => {
   spawnSync("notify-send", ["--urgency=critical", "--app-name=app-check", title, body], { stdio: "ignore" });
   const hook = process.env.APP_CHECK_DISCORD_WEBHOOK;
@@ -226,9 +258,15 @@ const main = async () => {
         : `FAIL  ${r.name} [${r.date}]: ${r.problems.join(" | ")}`,
     );
   }
+  // Backups, like pipelines, only on a full run.
+  const backupProblems = wanted.length === 0 && config.backups ? checkBackups(config.backups, Date.now()) : null;
+  if (backupProblems !== null) {
+    console.log(backupProblems.length === 0 ? `ok    backups: ${config.backups.lastRun}` : `FAIL  backups: ${backupProblems.join(" | ")}`);
+  }
   const results = [
     ...appResults,
     ...pipelineResults.map((r) => ({ app: `${r.name} [${r.date}]`, problems: r.problems })),
+    ...(backupProblems === null ? [] : [{ app: "backups", problems: backupProblems }]),
   ];
   const failed = results.filter((r) => r.problems.length > 0);
   if (failed.length > 0) {
