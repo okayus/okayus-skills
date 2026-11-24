@@ -3,7 +3,8 @@
 Screen-by-screen notes for the one-time ceremony in `SKILL.md`, written so that a
 browser-automation agent (Claude in Chrome, Playwright) — or a human in a hurry —
 does not have to guess where a field is or what it is called. Recorded on
-2026-08-23 (Screens 1-5) and 2026-09-02 (Screen 3B, the existing-Worker route) on a
+2026-08-23 (Screens 1-5) and 2026-09-02 (Screen 3B, the existing-Worker route), with
+the changes seen on 2026-11-22 marked, on a
 **Japanese-language** dashboard; English equivalents are given
 where the docs confirm them (`Root directory`, `Advanced settings`,
 `Builds for non-production branches`, `Create new token`) and marked *(translated)*
@@ -79,16 +80,25 @@ anything — the Create-an-app wizard refuses a name already in use (red inline 
 under プロジェクト名: 「この名前のプロジェクトはすでに存在します。別の名前を選択してください」).
 The rejection is client-side validation: nothing is created, no orphan token.
 
+**If the card shows GitHub / GitLab buttons instead of 接続** (2026-11-22), your GitHub
+user has not authorized the *Cloudflare Workers and Pages* app, even if the App is
+installed. GitHub there leads to `installations/select_target`, which offers only
+*Configure* and never returns. Authorize through Workers & Pages → Create →
+*Connect GitHub* (`login/oauth/authorize` → Authorize), then reopen the Worker's
+Builds settings: 接続 is there.
+
 Modal titled **リポジトリに接続** / "Git プロバイダーからリポジトリを選択":
 
 | Field (JA) | Default | Set to |
 |---|---|---|
 | Git アカウント | your GitHub account | leave |
-| リポジトリ | **pre-filled** with the repo matching the Worker | leave (verify) |
+| リポジトリ | **pre-filled**: the repo matching the Worker on 2026-09-02, but the **first repo in the list** on 2026-11-22 | **check it**, and pick the Worker's repo |
 | 本番ブランチ | **pre-filled** `main` | leave (verify) |
 | ☑ プレビュービルドを有効化 | **ticked** | **untick** — the 非本番ブランチのデプロイ コマンド field disappears when it is really off, which is the reliable tell |
 | ビルド コマンド | `読み込み中...` for a second, then `pnpm run build` | wait for it to load, then `pnpm install --frozen-lockfile && pnpm run build` |
 | デプロイ コマンド | `npx wrangler deploy` | `pnpm exec wrangler d1 migrations apply <db> --remote && pnpm exec wrangler deploy` |
+| ビルドを無効化 (toggle, seen on 2026-11-22) | off | leave off |
+| プレビューコマンド (seen on 2026-11-22) | `npx wrangler preview` | leave; it is unused while preview builds are off |
 | 詳細設定 → パス | `/` | `apps/web` (the package dir) |
 | 詳細設定 → API トークン | **another project's build token** | **新しいトークンを作成する — it is the FIRST entry here**, not the last as in the wizard |
 | 詳細設定 → トークン名 | **pre-filled** `Workers Builds - YYYY-MM-DD HH:MM` | overwrite with `<worker> Workers Builds` |
@@ -135,6 +145,10 @@ changes → discard / save*):
 6. **変数とシークレット / Variables and secrets** — "no build variables configured" + 追加.
 7. **デプロイ フック / Deploy hooks**.
 
+On 2026-11-22 the section was split into two tabs after connecting: **プロダクション**
+(production) and **プレビューのベース** (preview base). The **プレビューブランチのビルド**
+toggle (preview branch builds, off) sits on the preview tab.
+
 ## Screen 6 — My Profile → API tokens (only if you really need a hand-made user token)
 
 Not needed for the keyless ceremony any more (see *Dropped step* in `SKILL.md`). Needed
@@ -170,6 +184,9 @@ for e.g. the Builds REST API (`Workers Builds Configuration: Edit`, user token o
   fields (watch paths): type, Enter.
 - `find`/accessibility refs are the robust way to hit options whose label is Japanese
   (`アカウント設定`) when typing is unreliable.
+- **On 2026-11-22, `find` and `read_page` were refused on dash.cloudflare.com**
+  ("Permission denied for reading pages on this domain"). The whole ceremony then ran
+  on screenshots and coordinates; take a screenshot immediately before each click.
 - Dropdowns that still show the prior value after a click (e.g. the picker's pre-selected
   token) are a sign the click opened the list but nothing was chosen — screenshot before
   moving on.
